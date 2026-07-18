@@ -29,37 +29,42 @@ Built with **Node + Express + Socket.io** (authoritative server) and a
 - **First team to 40 points wins** (target score + turn length are adjustable in
   the lobby).
 
+## Architecture
+
+Runs entirely on **Cloudflare Workers** (free tier, no credit card):
+
+- The **Worker** ([`worker/index.js`](worker/index.js)) serves the built React
+  client and routes WebSocket upgrades.
+- Each game room is one **Durable Object** ([`worker/gameRoom.js`](worker/gameRoom.js))
+  that holds the players' WebSocket connections + game state and drives the
+  countdown → turn → reveal timing with a single storage **alarm** per phase.
+- The game logic ([`server/engine.js`](server/engine.js),
+  [`server/matching.js`](server/matching.js), word lists) is plain,
+  runtime-agnostic JavaScript shared by the Worker.
+
+No database, no always-on server, no card.
+
 ## Run locally (development)
 
 ```bash
-npm install            # server deps
-npm --prefix client install
-npm run dev            # starts server (:3001) + Vite client (:5173)
+npm install            # installs wrangler
+npm run dev            # builds the client + runs `wrangler dev` on :8787
 ```
 
-Open http://localhost:5173. To test with real phones on the same Wi-Fi, open
-`http://<your-computer-ip>:5173` on each phone (the client auto-connects to the
-server on the same host).
+Open http://127.0.0.1:8787. To test with real phones on the same Wi-Fi, run
+`wrangler dev --ip 0.0.0.0` and open `http://<your-computer-ip>:8787` on each phone.
 
-## Run as production build
+## Deploy (free, no card, always-on)
 
 ```bash
-npm run build          # installs + builds the client into client/dist
-npm start              # serves the app + game on :3001  → http://localhost:3001
+npx wrangler login     # opens the browser once to auth your free Cloudflare account
+npm run deploy         # builds the client + `wrangler deploy`
 ```
 
-## Deploy (so links/QR work over the internet)
-
-The server keeps a live WebSocket per player, so use a host that runs a
-**persistent Node process** (not serverless). Any of these free tiers work:
-
-- **Render** — this repo includes `render.yaml`. Create a new Web Service from
-  the repo; build `npm install && npm run build`, start `npm start`.
-- **Railway / Fly.io / a VPS** — use the included `Dockerfile`, or set
-  build = `npm install && npm run build`, start = `npm start`.
-
-The app listens on `process.env.PORT`. No database required (rooms live in
-memory; stale rooms are swept after an hour).
+You'll get a permanent `https://team-taboo-araby.<your-subdomain>.workers.dev`
+URL that runs 24/7 with no laptop and no card. Durable Objects are used via the
+**SQLite backend** (`new_sqlite_classes`), which is included on the Workers Free
+plan.
 
 ## Add your own words
 
@@ -77,21 +82,25 @@ normalized franco or Arabic) are removed automatically.
 ## Tests
 
 ```bash
-npm test               # normalization + bilingual scoring unit tests
-node scripts/simGame.js   # full 4-player game simulation (needs a server running)
+npm test                                       # normalization + bilingual scoring unit tests
+# full 4-player game sim against a running `wrangler dev`:
+TT_URL=http://127.0.0.1:8787 node scripts/simGame.js
 ```
 
 ## Project layout
 
 ```
+worker/
+  index.js        Worker entry: mint room codes, route WS upgrades, serve the client
+  gameRoom.js     Durable Object: one per room (sockets + state + alarm-based timer)
 server/
-  index.js        Express + Socket.io, timer orchestration, static hosting
-  engine.js       Authoritative game state: rooms, teams, turn rotation, scoring, redaction
+  engine.js       Game state: rooms, teams, turn rotation, scoring, per-player redaction
   matching.js     Franco + Arabic normalization and fuzzy scoring (2pt exact / 1pt close)
   data/wordLists.js  Bilingual word lists (franco + Arabic)
 client/
   src/App.jsx     Screen router
-  src/lib/        socket + useGame hook
+  src/lib/useGame.js  WebSocket client hook
   src/screens/    Home, Lobby, Countdown, Turn, TurnEnd, GameOver
   src/components/  Backdrop, Timer, Scoreboard, Share (code/link/WhatsApp/QR)
+wrangler.toml     Worker + Durable Object + static-assets config
 ```

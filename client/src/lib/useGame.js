@@ -1,14 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { socket } from './socket';
 
 const STORAGE_KEY = 'teamtaboo:session';
 
 function loadSession() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch { return null; }
 }
 function saveSession(s) {
   if (s) localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
@@ -24,119 +19,137 @@ export function codeFromUrl() {
   return m ? m[1].toUpperCase() : '';
 }
 
+const wsUrl = (code) =>
+  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/room/${code}/ws`;
+
 export function useGame() {
-  const [connected, setConnected] = useState(socket.connected);
-  const [state, setState] = useState(null);   // redacted room state from server
-  const [remaining, setRemaining] = useState(null); // live turn clock
+  const [connected, setConnected] = useState(false);
+  const [state, setState] = useState(null);
+  const [remaining, setRemaining] = useState(null);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('idle'); // idle | joining | inroom
+
+  const wsRef = useRef(null);
+  const sessionRef = useRef(null);     // { code, playerId }
+  const helloRef = useRef(null);       // first message to send on open
+  const leftRef = useRef(false);       // intentional leave -> no reconnect
   const guessListeners = useRef(new Set());
 
-  // Wire socket events once.
-  useEffect(() => {
-    const onConnect = () => {
-      setConnected(true);
-      // Attempt to restore a prior session on (re)connect.
-      const s = loadSession();
-      if (s && s.code && s.playerId) {
-        socket.emit('rejoin', s, (res) => {
-          if (res && res.error) {
-            saveSession(null);
-          }
-        });
-      }
-    };
-    const onDisconnect = () => setConnected(false);
-    const onState = (s) => {
-      setState(s);
-      setStatus('inroom');
-      if (s && s.turn && (s.phase === 'turn' || s.phase === 'countdown')) {
-        setRemaining(s.turn.remaining);
-      }
-      if (!s || s.phase === 'lobby' || s.phase === 'gameOver' || s.phase === 'turnEnd') {
-        setRemaining(s && s.turn ? s.turn.remaining : null);
-      }
-    };
-    const onTick = ({ remaining }) => setRemaining(remaining);
-    const onGuessResult = (payload) => {
-      for (const fn of guessListeners.current) fn(payload);
-    };
-
-    socket.on('connect', onConnect);
-    socket.on('disconnect', onDisconnect);
-    socket.on('state', onState);
-    socket.on('tick', onTick);
-    socket.on('guessResult', onGuessResult);
-    if (socket.connected) onConnect();
-
-    return () => {
-      socket.off('connect', onConnect);
-      socket.off('disconnect', onDisconnect);
-      socket.off('state', onState);
-      socket.off('tick', onTick);
-      socket.off('guessResult', onGuessResult);
-    };
+  const send = useCallback((obj) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }, []);
 
-  const createGame = useCallback((name) => {
+  // Open (or reopen) the socket for a room, sending `hello` once connected.
+  const open = useCallback((code, hello) => {
+    leftRef.current = false;
+    helloRef.current = hello;
+    try { if (wsRef.current) wsRef.current.close(); } catch {}
+    const ws = new WebSocket(wsUrl(code));
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setConnected(true);
+      if (helloRef.current) send(helloRef.current);
+    };
+    ws.onclose = () => {
+      setConnected(false);
+      // Auto-reconnect (as a rejoin) unless the user intentionally left.
+      if (!leftRef.current && sessionRef.current) {
+        setTimeout(() => {
+          if (leftRef.current || !sessionRef.current) return;
+          open(sessionRef.current.code, { type: 'rejoin', playerId: sessionRef.current.playerId });
+        }, 1000);
+      }
+    };
+    ws.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === 'joined') {
+        sessionRef.current = { code: msg.code, playerId: msg.playerId };
+        saveSession(sessionRef.current);
+        setStatus('inroom');
+      } else if (msg.type === 'state') {
+        setState(msg.state);
+        setStatus('inroom');
+      } else if (msg.type === 'guessResult') {
+        for (const fn of guessListeners.current) fn(msg);
+      } else if (msg.type === 'error') {
+        setError(msg.message || 'Something went wrong');
+        // A join/create that failed: drop back to the home screen.
+        if (status !== 'inroom' && !state) {
+          leftRef.current = true;
+          sessionRef.current = null;
+          saveSession(null);
+          setStatus('idle');
+          try { ws.close(); } catch {}
+        }
+      }
+    };
+  }, [send, state, status]);
+
+  // Restore a prior session on first mount.
+  useEffect(() => {
+    const s = loadSession();
+    if (s && s.code && s.playerId) {
+      sessionRef.current = s;
+      setStatus('joining');
+      open(s.code, { type: 'rejoin', playerId: s.playerId });
+    }
+    return () => { leftRef.current = true; try { wsRef.current && wsRef.current.close(); } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Derive the on-screen countdown from the authoritative turn deadline.
+  useEffect(() => {
+    if (!state || state.phase !== 'turn' || !state.turn || !state.turn.deadline) return;
+    const dl = state.turn.deadline;
+    const upd = () => setRemaining(Math.max(0, Math.ceil((dl - Date.now()) / 1000)));
+    upd();
+    const id = setInterval(upd, 250);
+    return () => clearInterval(id);
+  }, [state && state.phase, state && state.turn && state.turn.deadline]);
+
+  const createGame = useCallback(async (name) => {
     setError('');
     setStatus('joining');
-    socket.emit('createRoom', { name }, (res) => {
-      if (res && res.ok) {
-        saveSession({ code: res.code, playerId: res.playerId });
-      } else {
-        setStatus('idle');
-        setError((res && res.error) || 'Could not create the game');
-      }
-    });
-  }, []);
+    try {
+      const res = await fetch('/api/new');
+      const { code } = await res.json();
+      open(code, { type: 'createRoom', name });
+    } catch {
+      setStatus('idle');
+      setError('Could not reach the server');
+    }
+  }, [open]);
 
   const joinGame = useCallback((name, code) => {
     setError('');
     setStatus('joining');
-    socket.emit('joinRoom', { name, code: (code || '').toUpperCase() }, (res) => {
-      if (res && res.ok) {
-        saveSession({ code: res.code, playerId: res.playerId });
-      } else {
-        setStatus('idle');
-        setError((res && res.error) || 'Could not join the game');
-      }
-    });
-  }, []);
+    open((code || '').toUpperCase(), { type: 'joinRoom', name });
+  }, [open]);
 
   const leave = useCallback(() => {
+    leftRef.current = true;
+    sessionRef.current = null;
+    helloRef.current = null;
     saveSession(null);
+    try { wsRef.current && wsRef.current.close(); } catch {}
     setState(null);
     setStatus('idle');
     setRemaining(null);
   }, []);
 
-  // Host actions
-  const addTeam = useCallback(() => socket.emit('addTeam'), []);
-  const removeTeam = useCallback((teamId) => socket.emit('removeTeam', { teamId }), []);
-  const assignPlayer = useCallback((playerId, teamId) => socket.emit('assignPlayer', { playerId, teamId }), []);
-  const renameTeam = useCallback((teamId, name) => socket.emit('renameTeam', { teamId, name }), []);
-  const setSettings = useCallback((s) => socket.emit('setSettings', s), []);
-  const startGame = useCallback(
-    () =>
-      new Promise((resolve) => {
-        socket.emit('startGame', {}, (res) => {
-          if (res && res.error) setError(res.error);
-          resolve(res);
-        });
-      }),
-    []
-  );
-  const restart = useCallback(() => socket.emit('restart'), []);
+  // Host / gameplay actions (all fire-and-forget over the socket).
+  const addTeam = useCallback(() => send({ type: 'addTeam' }), [send]);
+  const removeTeam = useCallback((teamId) => send({ type: 'removeTeam', teamId }), [send]);
+  const assignPlayer = useCallback((playerId, teamId) => send({ type: 'assignPlayer', playerId, teamId }), [send]);
+  const renameTeam = useCallback((teamId, name) => send({ type: 'renameTeam', teamId, name }), [send]);
+  const setSettings = useCallback((s) => send({ type: 'setSettings', ...s }), [send]);
+  const startGame = useCallback(() => send({ type: 'startGame' }), [send]);
+  const restart = useCallback(() => send({ type: 'restart' }), [send]);
+  const submitGuess = useCallback((text) => send({ type: 'guess', text }), [send]);
 
-  // Guessing
-  const submitGuess = useCallback(
-    (text) =>
-      new Promise((resolve) => {
-        socket.emit('submitGuess', { text }, resolve);
-      }),
-    []
-  );
   const onGuessResult = useCallback((fn) => {
     guessListeners.current.add(fn);
     return () => guessListeners.current.delete(fn);

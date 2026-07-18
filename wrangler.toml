@@ -1,0 +1,21 @@
+name = "team-taboo-araby"
+main = "worker/index.js"
+compatibility_date = "2025-05-01"
+
+# Serve the built React client. The Worker runs first (so /api/* routes work),
+# and falls back to these assets — with SPA routing for client-side navigation.
+[assets]
+directory = "./client/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+# One Durable Object per game room (holds the players' sockets + game state).
+[[durable_objects.bindings]]
+name = "GAME_ROOM"
+class_name = "GameRoom"
+
+# SQLite-backed Durable Objects are available on the free Workers plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GameRoom"]

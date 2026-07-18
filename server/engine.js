@@ -3,7 +3,6 @@
 // All timing side effects (the 40s clock, the between-turn pauses) live in
 // index.js; this module only mutates room state and answers "what now?".
 
-const crypto = require('crypto');
 const { normalize, scoreGuess } = require('./matching');
 const WORD_LISTS = require('./data/wordLists');
 
@@ -13,10 +12,23 @@ const TEAM_COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#ec
 const TEAM_NAMES = ['Red Team', 'Blue Team', 'Green Team', 'Amber Team', 'Purple Team', 'Pink Team', 'Teal Team', 'Orange Team'];
 const MAX_TEAMS = 8;
 
-function genId(bytes = 8) { return crypto.randomBytes(bytes).toString('hex'); }
+// Randomness via the WebCrypto global — works in Node 20+ AND Cloudflare Workers.
+function randInt(maxExclusive) {
+  if (maxExclusive <= 0) return 0;
+  const a = new Uint32Array(1);
+  globalThis.crypto.getRandomValues(a);
+  return a[0] % maxExclusive;
+}
+function genId(bytes = 8) {
+  const a = new Uint8Array(bytes);
+  globalThis.crypto.getRandomValues(a);
+  let s = '';
+  for (let i = 0; i < a.length; i++) s += a[i].toString(16).padStart(2, '0');
+  return s;
+}
 function genCode(len = 4) {
   let c = '';
-  for (let i = 0; i < len; i++) c += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
+  for (let i = 0; i < len; i++) c += CODE_ALPHABET[randInt(CODE_ALPHABET.length)];
   return c;
 }
 
@@ -46,7 +58,7 @@ function fullPool() {
 function shuffle(input) {
   const a = input.slice();
   for (let i = a.length - 1; i > 0; i--) {
-    const j = crypto.randomInt(i + 1);
+    const j = randInt(i + 1);
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
@@ -214,23 +226,17 @@ function setupTurn(room) {
     teamId,
     describerId,
     words: drawWords(room, room.settings.wordsPerTurn),
-    remaining: room.settings.turnSeconds,
-    startedAt: null,
+    deadline: null, // epoch ms when the turn ends; set on activate
   };
   room.phase = 'countdown';
 }
 
-function activateTurn(room) {
+// Begin the active guessing window. `deadline` is an epoch-ms timestamp; the
+// client derives the countdown from it, and the host DO fires one alarm at it.
+function activateTurn(room, deadline) {
   if (!room.turn) return;
-  room.turn.startedAt = Date.now();
+  room.turn.deadline = deadline;
   room.phase = 'turn';
-}
-
-// Decrement the clock. Returns 'running' | 'expired' | 'idle'.
-function tick(room) {
-  if (room.phase !== 'turn' || !room.turn) return 'idle';
-  room.turn.remaining = Math.max(0, room.turn.remaining - 1);
-  return room.turn.remaining <= 0 ? 'expired' : 'running';
 }
 
 // A guesser submits a word. Mutates state on a hit. Returns a result describing
@@ -325,6 +331,8 @@ function redactStateFor(room, playerId) {
     })),
     winnerTeamId: room.winnerTeamId,
     canStart: canStart(room),
+    // epoch ms when the current countdown / reveal phase ends (if any)
+    phaseEndsAt: room.phase === 'countdown' ? room.countdownEndsAt : room.phase === 'turnEnd' ? room.revealEndsAt : null,
   };
 
   if (room.turn && (room.phase === 'countdown' || room.phase === 'turn' || room.phase === 'turnEnd')) {
@@ -341,7 +349,7 @@ function redactStateFor(room, playerId) {
       teamColor: team && team.color,
       describerId: t.describerId,
       describerName: describer && describer.name,
-      remaining: t.remaining,
+      deadline: t.deadline, // epoch ms; client derives the on-screen clock
       total: t.words.length,
       solvedCount: t.words.filter((w) => w.solved).length,
       role,
@@ -369,6 +377,6 @@ function redactStateFor(room, playerId) {
 module.exports = {
   createRoom, addTeam, removeTeam, renameTeam, addPlayer, assignPlayer,
   teamPlayers, setSettings, canStart, startGame, setupTurn, activateTurn,
-  tick, applyGuess, endTurn, advanceTurn, restart, redactStateFor, roleFor,
+  applyGuess, endTurn, advanceTurn, restart, redactStateFor, roleFor,
   fullPool,
 };
