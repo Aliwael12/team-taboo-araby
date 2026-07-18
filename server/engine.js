@@ -13,10 +13,13 @@ const TEAM_NAMES = ['Red Team', 'Blue Team', 'Green Team', 'Amber Team', 'Purple
 const MAX_TEAMS = 8;
 
 // Randomness via the WebCrypto global — works in Node 20+ AND Cloudflare Workers.
+// Rejection sampling avoids modulo bias, so shuffles are uniformly random.
 function randInt(maxExclusive) {
   if (maxExclusive <= 0) return 0;
+  const range = 0x100000000;
+  const limit = range - (range % maxExclusive);
   const a = new Uint32Array(1);
-  globalThis.crypto.getRandomValues(a);
+  do { globalThis.crypto.getRandomValues(a); } while (a[0] >= limit);
   return a[0] % maxExclusive;
 }
 function genId(bytes = 8) {
@@ -59,9 +62,18 @@ function fullPool() {
   return POOL;
 }
 
-// A freshly shuffled deck of pool indices (numbers only — cheap to persist).
-function freshDeck() {
-  return shuffle(fullPool().map((_, i) => i));
+// How many recently-drawn words to hold back when the deck reshuffles.
+const RECENT_MAX = 60;
+
+// A new full deck of pool indices (numbers only — cheap to persist), with the
+// most RECENTLY drawn words placed at the BOTTOM (front of the array — we pop
+// from the end), so even a reshuffle can't bring a word straight back.
+function reshuffledDeck(room) {
+  const recent = new Set(Array.isArray(room && room.recent) ? room.recent : []);
+  const fresh = [], used = [];
+  const size = fullPool().length;
+  for (let i = 0; i < size; i++) (recent.has(i) ? used : fresh).push(i);
+  return [...shuffle(used), ...shuffle(fresh)];
 }
 
 // Fisher–Yates shuffle (returns a new array).
@@ -91,7 +103,8 @@ function createRoom(hostName) {
     turn: null,
     teamOrder: [],  // [teamId] snapshot at game start (only teams with >=2 players)
     rosters: {},    // teamId -> [playerId] snapshot at game start
-    deck: [],
+    deck: [],       // shuffled pool indices; drawn without replacement, kept across rematches
+    recent: [],     // last RECENT_MAX drawn indices (held back on reshuffle)
     winnerTeamId: null,
     createdAt: Date.now(),
   };
@@ -198,7 +211,9 @@ function startGame(room) {
   for (const t of room.teams) t.score = 0;
   room.turnIndex = 0;
   room.winnerTeamId = null;
-  room.deck = freshDeck();
+  // Keep drawing from the existing deck across rematches — only build one if
+  // this room has never dealt (or fully exhausted the pool).
+  if (!Array.isArray(room.deck) || room.deck.length === 0) room.deck = reshuffledDeck(room);
   setupTurn(room);
   return { ok: true };
 }
@@ -207,12 +222,19 @@ function startGame(room) {
 // Turn machinery
 // ---------------------------------------------------------------------------
 
+// Draw n words WITHOUT replacement. The deck is only rebuilt when the whole
+// pool has been dealt, and it persists across rematches in the same room, so
+// words cannot repeat until every other word has been seen.
 function drawWords(room, n) {
   const pool = fullPool();
+  if (!Array.isArray(room.recent)) room.recent = [];
   const out = [];
   for (let i = 0; i < n; i++) {
-    if (!Array.isArray(room.deck) || room.deck.length === 0) room.deck = freshDeck();
-    const item = pool[room.deck.pop()];
+    if (!Array.isArray(room.deck) || room.deck.length === 0) room.deck = reshuffledDeck(room);
+    const idx = room.deck.pop();
+    room.recent.push(idx);
+    if (room.recent.length > RECENT_MAX) room.recent.splice(0, room.recent.length - RECENT_MAX);
+    const item = pool[idx];
     out.push({ display: item.display, forms: item.forms, solved: false, points: 0, solvedById: null, status: 'open' });
   }
   return out;
@@ -308,6 +330,8 @@ function advanceTurn(room) {
 }
 
 // Back to the lobby, keeping players and team assignments but clearing scores.
+// The deck (and recent-words memory) is deliberately KEPT so a rematch keeps
+// dealing words the group hasn't seen yet.
 function restart(room) {
   room.phase = 'lobby';
   room.turn = null;
@@ -315,7 +339,6 @@ function restart(room) {
   room.winnerTeamId = null;
   room.teamOrder = [];
   room.rosters = {};
-  room.deck = [];
   for (const t of room.teams) t.score = 0;
 }
 
