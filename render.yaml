@@ -1,0 +1,12 @@
+# One-click deploy to Render (https://render.com) — a free tier that supports
+# the persistent WebSocket server Socket.io needs.
+services:
+  - type: web
+    name: team-taboo
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20

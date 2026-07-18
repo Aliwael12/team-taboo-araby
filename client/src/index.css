@@ -1,0 +1,93 @@
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/outfit';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #07070c;
+  color: #f4f4fb;
+  font-family: 'Inter Variable', system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* Inputs at >=16px so iOS Safari doesn't auto-zoom on focus. */
+input,
+button,
+textarea {
+  font-family: inherit;
+}
+input,
+textarea {
+  font-size: 16px;
+}
+
+/* Full-height app shell that respects mobile safe areas / notches. */
+.app-shell {
+  min-height: 100dvh;
+  padding: max(env(safe-area-inset-top), 0.5rem) env(safe-area-inset-right)
+    max(env(safe-area-inset-bottom), 0.75rem) env(safe-area-inset-left);
+}
+
+@layer components {
+  /* Frosted glass surface */
+  .glass {
+    @apply rounded-3xl border border-white/10 bg-white/[0.05] shadow-card backdrop-blur-xl;
+  }
+  .glass-soft {
+    @apply rounded-2xl border border-white/[0.07] bg-white/[0.035] backdrop-blur-md;
+  }
+
+  /* Primary neon gradient button */
+  .btn {
+    @apply relative inline-flex select-none items-center justify-center rounded-2xl px-5 font-display font-semibold
+      transition-transform duration-150 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40;
+  }
+  .btn-primary {
+    @apply btn text-ink-950;
+    background-image: linear-gradient(135deg, #a855f7 0%, #6366f1 55%, #22d3ee 100%);
+    box-shadow: 0 10px 30px -8px rgba(139, 92, 246, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  }
+  .btn-lime {
+    @apply btn text-ink-950;
+    background-image: linear-gradient(135deg, #a3e635 0%, #4ade80 100%);
+    box-shadow: 0 10px 30px -8px rgba(74, 222, 128, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  }
+  .btn-ghost {
+    @apply btn border border-white/10 bg-white/[0.05] text-white backdrop-blur-md;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .text-glow {
+    text-shadow: 0 0 24px rgba(168, 85, 247, 0.55);
+  }
+  .tabnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
