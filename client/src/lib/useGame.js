@@ -74,6 +74,23 @@ export function useGame() {
         setStatus('inroom');
       } else if (msg.type === 'guessResult') {
         for (const fn of guessListeners.current) fn(msg);
+      } else if (msg.type === 'kicked') {
+        leftRef.current = true;
+        sessionRef.current = null;
+        helloRef.current = null;
+        saveSession(null);
+        try { ws.close(); } catch {}
+        setState(null);
+        setStatus('idle');
+        setRemaining(null);
+        setError('You were removed from the room by the host.');
+        try {
+          const u = new URL(location.href);
+          if (u.searchParams.has('room') || u.searchParams.has('code')) {
+            u.searchParams.delete('room'); u.searchParams.delete('code');
+            history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+          }
+        } catch {}
       } else if (msg.type === 'error') {
         setError(msg.message || 'Something went wrong');
         // A join/create that failed: drop back to the home screen.
@@ -160,6 +177,7 @@ export function useGame() {
   const addTeam = useCallback(() => send({ type: 'addTeam' }), [send]);
   const removeTeam = useCallback((teamId) => send({ type: 'removeTeam', teamId }), [send]);
   const assignPlayer = useCallback((playerId, teamId) => send({ type: 'assignPlayer', playerId, teamId }), [send]);
+  const kickPlayer = useCallback((playerId) => send({ type: 'kickPlayer', playerId }), [send]);
   const renameTeam = useCallback((teamId, name) => send({ type: 'renameTeam', teamId, name }), [send]);
   const setSettings = useCallback((s) => send({ type: 'setSettings', ...s }), [send]);
   const startGame = useCallback(() => send({ type: 'startGame' }), [send]);
@@ -174,7 +192,7 @@ export function useGame() {
   return {
     connected, state, remaining, error, status, setError,
     createGame, joinGame, leave,
-    addTeam, removeTeam, assignPlayer, renameTeam, setSettings, startGame, restart,
+    addTeam, removeTeam, assignPlayer, kickPlayer, renameTeam, setSettings, startGame, restart,
     submitGuess, onGuessResult,
   };
 }

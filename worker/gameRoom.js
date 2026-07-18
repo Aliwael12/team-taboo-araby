@@ -123,6 +123,26 @@ export class GameRoom {
         break;
       }
 
+      case 'kickPlayer': {
+        if (!room || att.playerId !== room.hostId) return; // host only
+        const target = msg.playerId;
+        if (!target || target === room.hostId || !room.players[target]) return; // can't kick self / unknown
+        delete room.players[target];
+        room.order = room.order.filter((id) => id !== target);
+        // Tell the kicked player and neutralize their socket(s).
+        for (const s of this.state.getWebSockets()) {
+          const a = s.deserializeAttachment() || {};
+          if (a.playerId === target) {
+            try { s.send(JSON.stringify({ type: 'kicked' })); } catch {}
+            a.playerId = null;
+            s.serializeAttachment(a);
+          }
+        }
+        await this.saveRoom(room);
+        await this.broadcast(room);
+        break;
+      }
+
       case 'guess': {
         if (!room) return;
         const res = engine.applyGuess(room, att.playerId, msg.text);

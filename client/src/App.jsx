@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { useGame, codeFromUrl } from './lib/useGame';
 import Backdrop from './components/Backdrop';
 import Home from './screens/Home';
@@ -10,13 +9,16 @@ import GameOver from './screens/GameOver';
 
 export default function App() {
   const game = useGame();
-  const urlCode = useMemo(() => codeFromUrl(), []);
+  // Re-read each render so leaving/being kicked (which scrubs ?room=) returns
+  // us to a clean home screen instead of the old room's prefilled join form.
+  const urlCode = codeFromUrl();
   const { state, status, connected } = game;
 
   const actions = {
     addTeam: game.addTeam,
     removeTeam: game.removeTeam,
     assignPlayer: game.assignPlayer,
+    kickPlayer: game.kickPlayer,
     renameTeam: game.renameTeam,
     setSettings: game.setSettings,
     startGame: game.startGame,
@@ -32,7 +34,7 @@ export default function App() {
   const tint = state && state.turn ? state.turn.teamColor : null;
 
   let body;
-  let key = 'home';
+  let key = 'home:' + urlCode; // remount Home fresh when the room code is scrubbed
   if (status !== 'inroom' || !state) {
     body = (
       <Home

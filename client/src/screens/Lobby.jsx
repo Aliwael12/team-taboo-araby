@@ -1,6 +1,40 @@
 import { useState } from 'react';
 import Share from '../components/Share';
 
+// A player token. Tapping the body runs the main action (assign/select);
+// the host also gets a small ✕ to kick that player out of the room.
+function PlayerPill({ label, you, selected, ring, boxShadow, disabled, canKick, onMain, onKick, mainTitle }) {
+  const base = selected
+    ? 'bg-neon-amber text-ink-950 shadow-glow-amber'
+    : you
+      ? 'bg-white text-ink-950'
+      : 'bg-white/10 text-white';
+  return (
+    <span
+      className={`inline-flex animate-popIn items-center rounded-full text-sm font-medium ${base} ${ring ? 'ring-1 ring-white/40' : ''}`}
+      style={boxShadow ? { boxShadow } : undefined}
+    >
+      <button
+        disabled={disabled}
+        onClick={onMain}
+        title={mainTitle || ''}
+        className={`py-1.5 pl-3 ${canKick ? 'pr-1.5' : 'pr-3'} ${disabled ? '' : 'active:scale-95'}`}
+      >
+        {label}{you ? ' (you)' : ''}
+      </button>
+      {canKick && (
+        <button
+          onClick={onKick}
+          title="Kick from room"
+          className="mr-1 grid h-5 w-5 place-items-center rounded-full opacity-50 transition hover:bg-red-500/40 hover:text-red-100 hover:opacity-100 active:scale-90"
+        >
+          ✕
+        </button>
+      )}
+    </span>
+  );
+}
+
 // Pre-game lobby. Host assigns players to teams, tweaks settings, and starts.
 // Everyone else watches the teams fill up in real time.
 export default function Lobby({ state, actions }) {
@@ -10,6 +44,12 @@ export default function Lobby({ state, actions }) {
   const you = players.find((p) => p.id === youId);
   const yourTeam = you && teams.find((t) => t.id === you.teamId);
   const nameOf = (id) => (players.find((p) => p.id === id) || {}).name || '?';
+  const kick = (pid) => {
+    if (window.confirm(`Kick ${nameOf(pid)} from the room?`)) {
+      actions.kickPlayer(pid);
+      if (selected === pid) setSelected(null);
+    }
+  };
 
   return (
     <div className="app-shell mx-auto flex w-full max-w-md flex-col px-4 py-5">
@@ -79,16 +119,17 @@ export default function Lobby({ state, actions }) {
 
                 <div className="mt-2.5 flex min-h-[2.25rem] flex-wrap gap-2">
                   {t.playerIds.map((pid) => (
-                    <button
+                    <PlayerPill
                       key={pid}
+                      label={nameOf(pid)}
+                      you={pid === youId}
+                      boxShadow={pid !== youId ? `inset 0 0 0 1px ${t.color}55` : undefined}
                       disabled={!isHost}
-                      onClick={() => isHost && actions.assignPlayer(pid, null)}
-                      className={`chip animate-popIn font-medium ${pid === youId ? 'bg-white text-ink-950' : 'bg-white/10 text-white'} ${isHost ? 'active:scale-95' : ''}`}
-                      style={pid !== youId ? { boxShadow: `inset 0 0 0 1px ${t.color}55` } : undefined}
-                      title={isHost ? 'Tap to remove' : ''}
-                    >
-                      {nameOf(pid)}{pid === youId ? ' (you)' : ''}
-                    </button>
+                      canKick={isHost && pid !== youId}
+                      onMain={() => isHost && actions.assignPlayer(pid, null)}
+                      onKick={() => kick(pid)}
+                      mainTitle={isHost ? 'Tap to remove from team' : ''}
+                    />
                   ))}
                   {isHost && selected && (
                     <button
@@ -120,16 +161,17 @@ export default function Lobby({ state, actions }) {
           </div>
           <div className="flex flex-wrap gap-2">
             {unassigned.map((p) => (
-              <button
+              <PlayerPill
                 key={p.id}
+                label={p.name}
+                you={p.id === youId}
+                selected={selected === p.id}
+                ring={p.id === youId}
                 disabled={!isHost}
-                onClick={() => isHost && setSelected(selected === p.id ? null : p.id)}
-                className={`chip font-medium transition ${
-                  selected === p.id ? 'bg-neon-amber text-ink-950 shadow-glow-amber' : 'bg-white/10 text-white'
-                } ${p.id === youId ? 'ring-1 ring-white/40' : ''}`}
-              >
-                {p.name}{p.id === youId ? ' (you)' : ''}
-              </button>
+                canKick={isHost && p.id !== youId}
+                onMain={() => isHost && setSelected(selected === p.id ? null : p.id)}
+                onKick={() => kick(p.id)}
+              />
             ))}
           </div>
         </div>
