@@ -23,7 +23,10 @@ export default function App() {
     restart: game.restart,
     submitGuess: game.submitGuess,
     onGuessResult: game.onGuessResult,
+    leave: game.leave,
   };
+
+  const inGame = state && ['countdown', 'turn', 'turnEnd'].includes(state.phase);
 
   // Tint the backdrop with the active team's color when a game is running.
   const tint = state && state.turn ? state.turn.teamColor : null;
@@ -69,6 +72,14 @@ export default function App() {
       <div key={key} className="animate-screenIn">
         {body}
       </div>
+      {status === 'inroom' && inGame && (
+        <button
+          onClick={() => { if (window.confirm('Leave this room?')) game.leave(); }}
+          className="fixed bottom-3 left-3 z-40 rounded-full border border-white/10 bg-black/40 px-3 py-1.5 text-xs font-medium text-white/60 backdrop-blur-md active:scale-95"
+        >
+          ✕ Leave
+        </button>
+      )}
       <ConnectionBadge connected={connected} />
     </>
   );

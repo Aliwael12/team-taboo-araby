@@ -15,9 +15,17 @@ export default function Lobby({ state, actions }) {
     <div className="app-shell mx-auto flex w-full max-w-md flex-col px-4 py-5">
       <div className="mb-3 flex items-center justify-between">
         <h1 className="font-display text-3xl font-black">Lobby</h1>
-        <span className="chip bg-white/[0.06] text-white/60">
-          <span className="h-2 w-2 rounded-full bg-neon-green shadow-glow-green" /> {players.length} player{players.length !== 1 ? 's' : ''}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="chip bg-white/[0.06] text-white/60">
+            <span className="h-2 w-2 rounded-full bg-neon-green shadow-glow-green" /> {players.length} player{players.length !== 1 ? 's' : ''}
+          </span>
+          <button
+            onClick={() => actions.leave()}
+            className="chip border border-white/10 bg-white/[0.05] text-white/70 active:scale-95"
+          >
+            ✕ Leave
+          </button>
+        </div>
       </div>
 
       <Share code={code} />

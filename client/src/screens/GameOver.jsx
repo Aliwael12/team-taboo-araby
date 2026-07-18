@@ -34,7 +34,7 @@ export default function GameOver({ state, actions }) {
 
       <Scoreboard teams={teams} target={settings.targetScore} activeTeamId={winnerTeamId} />
 
-      <div className="mt-auto pt-8">
+      <div className="mt-auto space-y-2 pt-8">
         {isHost ? (
           <button onClick={actions.restart} className="btn-primary w-full py-4 text-lg">↺  Play again · same teams</button>
         ) : (
@@ -42,6 +42,7 @@ export default function GameOver({ state, actions }) {
             <span className="animate-pulseGlow font-display">Waiting for the host to start a rematch…</span>
           </div>
         )}
+        <button onClick={actions.leave} className="btn-ghost w-full py-3 text-base">✕ Leave room</button>
       </div>
     </div>
   );

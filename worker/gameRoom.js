@@ -102,6 +102,27 @@ export class GameRoom {
         break;
       }
 
+      case 'leaveRoom': {
+        const pid = att.playerId;
+        att.playerId = null;
+        ws.serializeAttachment(att); // so their imminent socket close is a no-op
+        if (!room || !pid || !room.players[pid]) break;
+
+        delete room.players[pid];
+        room.order = room.order.filter((id) => id !== pid);
+        if (room.hostId === pid) room.hostId = room.order[0] || null; // promote next player
+
+        if (room.order.length === 0) {
+          // last one out — free the room (and its code) entirely
+          await this.state.storage.deleteAlarm();
+          await this.state.storage.deleteAll();
+        } else {
+          await this.saveRoom(room);
+          await this.broadcast(room);
+        }
+        break;
+      }
+
       case 'guess': {
         if (!room) return;
         const res = engine.applyGuess(room, att.playerId, msg.text);

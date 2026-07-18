@@ -348,7 +348,7 @@ function redactStateFor(room, playerId) {
       teamName: team && team.name,
       teamColor: team && team.color,
       describerId: t.describerId,
-      describerName: describer && describer.name,
+      describerName: (describer && describer.name) || 'A player',
       deadline: t.deadline, // epoch ms; client derives the on-screen clock
       total: t.words.length,
       solvedCount: t.words.filter((w) => w.solved).length,

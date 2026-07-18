@@ -130,14 +130,30 @@ export function useGame() {
   }, [open]);
 
   const leave = useCallback(() => {
+    // Tell the server to remove us from the room, then close + forget.
+    try {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'leaveRoom' }));
+      }
+    } catch {}
     leftRef.current = true;
     sessionRef.current = null;
     helloRef.current = null;
     saveSession(null);
-    try { wsRef.current && wsRef.current.close(); } catch {}
+    setTimeout(() => { try { wsRef.current && wsRef.current.close(); } catch {} }, 50);
     setState(null);
     setStatus('idle');
     setRemaining(null);
+    setError('');
+    // Drop ?room=/?code= so a refresh starts on a clean home screen.
+    try {
+      const u = new URL(location.href);
+      if (u.searchParams.has('room') || u.searchParams.has('code')) {
+        u.searchParams.delete('room');
+        u.searchParams.delete('code');
+        history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+      }
+    } catch {}
   }, []);
 
   // Host / gameplay actions (all fire-and-forget over the socket).
