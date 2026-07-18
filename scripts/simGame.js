@@ -71,6 +71,7 @@ async function main() {
   const redaction = [];
   const scoreChecks = [];
   const handled = new Set();
+  const started = new Set();
 
   host.send({ type: 'startGame' });
 
@@ -78,6 +79,12 @@ async function main() {
     while (true) {
       const s = host.state;
       if (s && s.phase === 'gameOver') return;
+      // Manual start: the current describer taps Start to begin the clock.
+      if (s && s.phase === 'ready' && s.turn && !started.has(s.turn.index)) {
+        started.add(s.turn.index);
+        const d = all.find((c) => c.playerId === s.turn.describerId);
+        if (d) d.send({ type: 'startTurn' });
+      }
       if (s && s.phase === 'turn' && s.turn && !handled.has(s.turn.index)) {
         const idx = s.turn.index;
         handled.add(idx);
@@ -85,9 +92,11 @@ async function main() {
         describerSeq.push(describer ? describer.name : '?');
         const dWords = describer.state.turn.words;
         const guesser = all.find((c) => c.state && c.state.turn && c.state.turn.role === 'guesser');
+        const spectator = all.find((c) => c.state && c.state.turn && c.state.turn.role === 'spectator');
         redaction.push({
           describerHasText: Array.isArray(dWords) && dWords.every((w) => w.display && (w.display.fr || w.display.ar)),
           guesserNoText: guesser ? guesser.state.turn.words.every((w) => w.display === undefined) : true,
+          spectatorHasText: spectator ? (spectator.state.turn.words || []).length > 0 && spectator.state.turn.words.every((w) => w.display) : false,
         });
         if (guesser) {
           for (let i = 0; i < dWords.length; i++) {
@@ -114,6 +123,7 @@ async function main() {
   assert('turn rotation A-P1,B-P1,A-P2,B-P2,…', describerSeq.length >= expected.length && expected.every((n, i) => describerSeq[i] === n), describerSeq.slice(0, 9).join(' → '));
   assert('describer always receives words', redaction.every((r) => r.describerHasText));
   assert('guessers never receive words', redaction.every((r) => r.guesserNoText));
+  assert('opposing team sees the words', redaction.every((r) => r.spectatorHasText));
   assert('exact guesses scored +2', scoreChecks.filter((s) => s.kind === 'exact').every((s) => s.ok));
   assert('misspelled guesses scored +1', scoreChecks.filter((s) => s.kind === 'close').every((s) => s.ok));
   const winner = host.state.teams.find((t) => t.id === host.state.winnerTeamId);

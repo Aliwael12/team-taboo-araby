@@ -1,11 +1,28 @@
-// Circular countdown ring with a neon glow. `remaining`/`total` in seconds.
-export default function Timer({ remaining, total, size = 96 }) {
-  const r = remaining == null ? total : remaining;
-  const frac = total > 0 ? Math.max(0, Math.min(1, r / total)) : 0;
+import { useEffect, useState } from 'react';
+
+// Circular countdown ring with a neon glow.
+// Self-ticking: derives the remaining seconds from the server's `deadline`
+// (epoch ms, corrected by `offset`) so only THIS component re-renders each
+// tick — the rest of the app stays untouched.
+export default function Timer({ deadline, total, offset = 0, size = 96 }) {
+  const calc = () =>
+    deadline == null ? null : Math.max(0, Math.ceil((deadline - (Date.now() + offset)) / 1000));
+  const [r, setR] = useState(calc);
+
+  useEffect(() => {
+    setR(calc());
+    if (deadline == null) return;
+    const id = setInterval(() => setR(calc()), 500);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deadline, offset]);
+
+  const shown = r == null ? total : r;
+  const frac = total > 0 ? Math.max(0, Math.min(1, (shown || 0) / total)) : 0;
   const stroke = Math.max(6, Math.round(size * 0.085));
   const radius = (size - stroke) / 2;
   const circ = 2 * Math.PI * radius;
-  const danger = r != null && r <= 10;
+  const danger = shown != null && shown <= 10;
   const color = danger ? '#fb7185' : '#22d3ee';
   const gid = `tg-${size}`;
 
@@ -41,7 +58,7 @@ export default function Timer({ remaining, total, size = 96 }) {
         }`}
         style={{ fontSize: size * 0.34 }}
       >
-        {r == null ? '—' : r}
+        {shown == null ? '—' : shown}
       </div>
     </div>
   );

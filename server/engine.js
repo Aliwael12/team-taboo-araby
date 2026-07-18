@@ -34,7 +34,11 @@ function genCode(len = 4) {
 
 // Flatten every list into one deduped pool of bilingual entries.
 // Each pool item: { display: { fr, ar }, forms: [normalized accepted forms] }.
+// Built once per isolate and memoized — the word lists are static, and rooms
+// only ever store INDICES into this pool (keeps persisted state tiny).
+let POOL = null;
 function fullPool() {
+  if (POOL) return POOL;
   const seen = new Map(); // dedupe key (first normalized form) -> item
   const lists = Array.isArray(WORD_LISTS.lists) ? WORD_LISTS.lists : [];
   for (const list of lists) {
@@ -51,7 +55,13 @@ function fullPool() {
       seen.set(key, { display: { fr: fr || null, ar: ar || null }, forms });
     }
   }
-  return [...seen.values()];
+  POOL = [...seen.values()];
+  return POOL;
+}
+
+// A freshly shuffled deck of pool indices (numbers only — cheap to persist).
+function freshDeck() {
+  return shuffle(fullPool().map((_, i) => i));
 }
 
 // Fisher–Yates shuffle (returns a new array).
@@ -72,7 +82,7 @@ function createRoom(hostName) {
   const room = {
     code: genCode(),
     hostId: null,
-    phase: 'lobby', // lobby | countdown | turn | turnEnd | gameOver
+    phase: 'lobby', // lobby | ready | turn | turnEnd | gameOver
     players: {},    // id -> { id, name, teamId, connected, socketId }
     order: [],      // player ids in join order
     teams: [],      // { id, name, color, score }
@@ -188,7 +198,7 @@ function startGame(room) {
   for (const t of room.teams) t.score = 0;
   room.turnIndex = 0;
   room.winnerTeamId = null;
-  room.deck = shuffle(fullPool());
+  room.deck = freshDeck();
   setupTurn(room);
   return { ok: true };
 }
@@ -198,10 +208,11 @@ function startGame(room) {
 // ---------------------------------------------------------------------------
 
 function drawWords(room, n) {
+  const pool = fullPool();
   const out = [];
   for (let i = 0; i < n; i++) {
-    if (room.deck.length === 0) room.deck = shuffle(fullPool());
-    const item = room.deck.pop();
+    if (!Array.isArray(room.deck) || room.deck.length === 0) room.deck = freshDeck();
+    const item = pool[room.deck.pop()];
     out.push({ display: item.display, forms: item.forms, solved: false, points: 0, solvedById: null, status: 'open' });
   }
   return out;
@@ -220,15 +231,23 @@ function describerFor(room, turnIndex) {
 }
 
 function setupTurn(room) {
-  const { teamId, describerId } = describerFor(room, room.turnIndex);
+  // Skip past describers who are no longer in the room (left or kicked) so
+  // the game can never get stuck waiting on a ghost.
+  let sel = describerFor(room, room.turnIndex);
+  let guard = 0;
+  while (!room.players[sel.describerId] && guard < 128) {
+    room.turnIndex++;
+    sel = describerFor(room, room.turnIndex);
+    guard++;
+  }
   room.turn = {
     index: room.turnIndex,
-    teamId,
-    describerId,
+    teamId: sel.teamId,
+    describerId: sel.describerId,
     words: drawWords(room, room.settings.wordsPerTurn),
     deadline: null, // epoch ms when the turn ends; set on activate
   };
-  room.phase = 'countdown';
+  room.phase = 'ready'; // waits for the describer to tap Start
 }
 
 // Begin the active guessing window. `deadline` is an epoch-ms timestamp; the
@@ -318,6 +337,8 @@ function redactStateFor(room, playerId) {
   const state = {
     code: room.code,
     phase: room.phase,
+    serverNow: Date.now(), // lets clients correct for clock skew
+
     hostId: room.hostId,
     youId: playerId,
     isHost: playerId === room.hostId,
@@ -331,11 +352,12 @@ function redactStateFor(room, playerId) {
     })),
     winnerTeamId: room.winnerTeamId,
     canStart: canStart(room),
-    // epoch ms when the current countdown / reveal phase ends (if any)
-    phaseEndsAt: room.phase === 'countdown' ? room.countdownEndsAt : room.phase === 'turnEnd' ? room.revealEndsAt : null,
+    // epoch ms when the reveal phase ends (the 'ready' phase has no clock —
+    // it waits for the describer to tap Start).
+    phaseEndsAt: room.phase === 'turnEnd' ? room.revealEndsAt : null,
   };
 
-  if (room.turn && (room.phase === 'countdown' || room.phase === 'turn' || room.phase === 'turnEnd')) {
+  if (room.turn && (room.phase === 'ready' || room.phase === 'turn' || room.phase === 'turnEnd')) {
     const t = room.turn;
     const team = room.teams.find((x) => x.id === t.teamId);
     const describer = room.players[t.describerId];
@@ -355,18 +377,22 @@ function redactStateFor(room, playerId) {
       role,
     };
 
-    if (role === 'describer' || reveal) {
-      // Full words visible (to the describer during play, to everyone at reveal).
-      turn.words = t.words.map((w) => ({
-        display: w.display,
-        solved: w.solved,
-        points: w.points,
-        status: w.status,
-        solvedByName: w.solvedById ? (room.players[w.solvedById] && room.players[w.solvedById].name) : null,
-      }));
-    } else {
-      // Guessers & spectators: progress only — never the words themselves.
-      turn.words = t.words.map((w) => ({ solved: w.solved }));
+    // Words are only revealed once the turn has actually started (not while
+    // waiting on the describer to tap Start). The describer and the OPPOSING
+    // teams (spectators) see the words + how each was marked; the guessing team
+    // sees only progress (they're the ones typing).
+    if (room.phase === 'turn' || room.phase === 'turnEnd') {
+      if (role === 'describer' || role === 'spectator' || reveal) {
+        turn.words = t.words.map((w) => ({
+          display: w.display,
+          solved: w.solved,
+          points: w.points,
+          status: w.status,
+          solvedByName: w.solvedById ? (room.players[w.solvedById] && room.players[w.solvedById].name) : null,
+        }));
+      } else {
+        turn.words = t.words.map((w) => ({ solved: w.solved }));
+      }
     }
     state.turn = turn;
   }

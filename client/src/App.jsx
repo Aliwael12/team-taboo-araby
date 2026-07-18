@@ -1,8 +1,9 @@
+import { useMemo } from 'react';
 import { useGame, codeFromUrl } from './lib/useGame';
 import Backdrop from './components/Backdrop';
 import Home from './screens/Home';
 import Lobby from './screens/Lobby';
-import Countdown from './screens/Countdown';
+import Ready from './screens/Ready';
 import Turn from './screens/Turn';
 import TurnEnd from './screens/TurnEnd';
 import GameOver from './screens/GameOver';
@@ -12,23 +13,34 @@ export default function App() {
   // Re-read each render so leaving/being kicked (which scrubs ?room=) returns
   // us to a clean home screen instead of the old room's prefilled join form.
   const urlCode = codeFromUrl();
-  const { state, status, connected } = game;
+  const { state, status, connected, clockOffset } = game;
 
-  const actions = {
-    addTeam: game.addTeam,
-    removeTeam: game.removeTeam,
-    assignPlayer: game.assignPlayer,
-    kickPlayer: game.kickPlayer,
-    renameTeam: game.renameTeam,
-    setSettings: game.setSettings,
-    startGame: game.startGame,
-    restart: game.restart,
-    submitGuess: game.submitGuess,
-    onGuessResult: game.onGuessResult,
-    leave: game.leave,
-  };
+  // Stable identity: screens subscribe to guess results in an effect keyed on
+  // `actions`, so this must not change on every render.
+  const actions = useMemo(
+    () => ({
+      addTeam: game.addTeam,
+      removeTeam: game.removeTeam,
+      assignPlayer: game.assignPlayer,
+      kickPlayer: game.kickPlayer,
+      renameTeam: game.renameTeam,
+      setSettings: game.setSettings,
+      startGame: game.startGame,
+      startTurn: game.startTurn,
+      skipTurn: game.skipTurn,
+      restart: game.restart,
+      submitGuess: game.submitGuess,
+      onGuessResult: game.onGuessResult,
+      leave: game.leave,
+    }),
+    [
+      game.addTeam, game.removeTeam, game.assignPlayer, game.kickPlayer,
+      game.renameTeam, game.setSettings, game.startGame, game.startTurn,
+      game.skipTurn, game.restart, game.submitGuess, game.onGuessResult, game.leave,
+    ]
+  );
 
-  const inGame = state && ['countdown', 'turn', 'turnEnd'].includes(state.phase);
+  const inGame = state && ['ready', 'turn', 'turnEnd'].includes(state.phase);
 
   // Tint the backdrop with the active team's color when a game is running.
   const tint = state && state.turn ? state.turn.teamColor : null;
@@ -51,11 +63,11 @@ export default function App() {
       case 'lobby':
         body = <Lobby state={state} actions={actions} />;
         break;
-      case 'countdown':
-        body = <Countdown state={state} />;
+      case 'ready':
+        body = <Ready state={state} actions={actions} />;
         break;
       case 'turn':
-        body = <Turn state={state} remaining={game.remaining} actions={actions} />;
+        body = <Turn state={state} clockOffset={clockOffset} actions={actions} />;
         break;
       case 'turnEnd':
         body = <TurnEnd state={state} />;

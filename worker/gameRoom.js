@@ -1,24 +1,35 @@
 // Durable Object: one live instance per game room.
 //
-// Holds the room state (persisted to DO storage so it survives hibernation),
-// manages the players' WebSocket connections (Hibernation API), and drives the
-// countdown -> turn -> reveal timing with a single storage alarm per phase.
+// Performance model:
+//   - Room state lives IN MEMORY (this.room); it's loaded once per wake via
+//     blockConcurrencyWhile and persisted as one small blob (the word deck is
+//     just pool indices, so writes are a few KB, not the whole word list).
+//   - Guess acks are sent IMMEDIATELY, before any storage write.
+//   - Scoring updates go out as tiny `wordSolved` deltas; full redacted-state
+//     broadcasts happen only on phase changes / roster changes.
+//   - `ping` frames are auto-answered with `pong` by the runtime without waking
+//     the object (WebSocket hibernation stays cheap).
 import engine from '../server/engine.js';
 
-const COUNTDOWN_MS = Number(globalThis.TT_COUNTDOWN_MS) || 3000;
-const REVEAL_MS = Number(globalThis.TT_REVEAL_MS) || 5000;
+const REVEAL_MS = 5000;
 
 export class GameRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    this.room = null;
+    // Load persisted state before any event is delivered.
+    state.blockConcurrencyWhile(async () => {
+      this.room = (await state.storage.get('room')) || null;
+    });
+    // Heartbeats answered by the runtime, no handler invocation needed.
+    try {
+      this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+    } catch { /* older runtimes */ }
   }
 
-  async loadRoom() {
-    return (await this.state.storage.get('room')) || null;
-  }
-  async saveRoom(room) {
-    await this.state.storage.put('room', room);
+  persist() {
+    return this.state.storage.put('room', this.room);
   }
 
   // --- WebSocket lifecycle -------------------------------------------------
@@ -40,42 +51,58 @@ export class GameRoom {
     try { ws.send(JSON.stringify(obj)); } catch { /* socket gone */ }
   }
 
-  async broadcast(room) {
+  // Full redacted state to every seated player (phase/roster changes only).
+  broadcast() {
+    const room = this.room;
+    if (!room) return;
     for (const ws of this.state.getWebSockets()) {
       const att = ws.deserializeAttachment() || {};
-      if (!att.playerId) continue;
+      if (!att.playerId || !room.players[att.playerId]) continue;
       this.send(ws, { type: 'state', state: engine.redactStateFor(room, att.playerId) });
+    }
+  }
+
+  // Small identical event to every seated player (no per-player redaction).
+  broadcastEvent(obj) {
+    const room = this.room;
+    if (!room) return;
+    const payload = JSON.stringify(obj);
+    for (const ws of this.state.getWebSockets()) {
+      const att = ws.deserializeAttachment() || {};
+      if (!att.playerId || !room.players[att.playerId]) continue;
+      try { ws.send(payload); } catch { /* socket gone */ }
     }
   }
 
   // --- message handling ----------------------------------------------------
 
   async webSocketMessage(ws, raw) {
+    if (raw === 'ping') { try { ws.send('pong'); } catch {} return; } // fallback if auto-response unavailable
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
     const att = ws.deserializeAttachment() || {};
-    let room = await this.loadRoom();
+    const room = this.room;
     const now = Date.now();
 
     switch (msg.type) {
       case 'createRoom': {
         if (!room) {
           const created = engine.createRoom(msg.name);
-          room = created.room;
-          room.code = att.code || room.code;
+          this.room = created.room;
+          this.room.code = att.code || this.room.code;
           att.playerId = created.player.id;
           ws.serializeAttachment(att);
-          this.send(ws, { type: 'joined', code: room.code, playerId: created.player.id });
+          this.send(ws, { type: 'joined', code: this.room.code, playerId: created.player.id });
         } else {
-          // Room already exists (someone else hosted this code) — just join.
+          // Room already exists on this code — treat as a join.
           if (room.phase !== 'lobby') { this.send(ws, { type: 'error', message: 'That game already started' }); return; }
           const p = engine.addPlayer(room, msg.name);
           att.playerId = p.id;
           ws.serializeAttachment(att);
           this.send(ws, { type: 'joined', code: room.code, playerId: p.id });
         }
-        await this.saveRoom(room);
-        await this.broadcast(room);
+        this.broadcast();
+        await this.persist();
         break;
       }
 
@@ -86,39 +113,102 @@ export class GameRoom {
         att.playerId = p.id;
         ws.serializeAttachment(att);
         this.send(ws, { type: 'joined', code: room.code, playerId: p.id });
-        await this.saveRoom(room);
-        await this.broadcast(room);
+        this.broadcast();
+        await this.persist();
         break;
       }
 
       case 'rejoin': {
         if (!room || !room.players[msg.playerId]) { this.send(ws, { type: 'error', message: 'Player not found' }); return; }
+        // Supersede any older sockets for this player so stale connections
+        // can't double-receive or mark them disconnected later.
+        for (const other of this.state.getWebSockets()) {
+          if (other === ws) continue;
+          const a = other.deserializeAttachment() || {};
+          if (a.playerId === msg.playerId) {
+            a.playerId = null;
+            other.serializeAttachment(a);
+            try { other.close(4000, 'superseded'); } catch {}
+          }
+        }
         room.players[msg.playerId].connected = true;
         att.playerId = msg.playerId;
         ws.serializeAttachment(att);
         this.send(ws, { type: 'joined', code: room.code, playerId: msg.playerId });
-        await this.saveRoom(room);
-        await this.broadcast(room);
+        this.broadcast();
+        await this.persist();
+        break;
+      }
+
+      case 'guess': {
+        if (!room) return;
+        const res = engine.applyGuess(room, att.playerId, msg.text);
+        // Ack instantly — before any persistence or broadcasting.
+        this.send(ws, { type: 'guessResult', id: msg.id, text: msg.text, ...res });
+        if (res.status === 'exact' || res.status === 'close') {
+          if (res.gameOver || res.allSolved) {
+            await this.endTurnNow(now); // single phase broadcast covers the word too
+          } else {
+            const solver = room.players[att.playerId];
+            this.broadcastEvent({
+              type: 'wordSolved',
+              turnIndex: room.turn.index,
+              index: res.index,
+              points: res.points,
+              status: res.status,
+              solvedByName: solver ? solver.name : null,
+              teamId: room.turn.teamId,
+              teamScore: res.teamScore,
+              solvedCount: room.turn.words.filter((w) => w.solved).length,
+            });
+            await this.persist();
+          }
+        }
+        break;
+      }
+
+      case 'startTurn': {
+        // Only the player whose turn it is starts the clock.
+        if (!room || room.phase !== 'ready' || !room.turn) return;
+        if (att.playerId !== room.turn.describerId) return;
+        engine.activateTurn(room, now + room.settings.turnSeconds * 1000);
+        this.broadcast();
+        await this.state.storage.setAlarm(room.turn.deadline);
+        await this.persist();
+        break;
+      }
+
+      case 'skipTurn': {
+        // Host escape hatch when the describer is offline/gone.
+        if (!room || room.phase !== 'ready' || !room.turn) return;
+        if (att.playerId !== room.hostId) return;
+        engine.advanceTurn(room);
+        this.broadcast();
+        await this.persist();
         break;
       }
 
       case 'leaveRoom': {
         const pid = att.playerId;
         att.playerId = null;
-        ws.serializeAttachment(att); // so their imminent socket close is a no-op
+        ws.serializeAttachment(att); // their imminent socket close is a no-op
         if (!room || !pid || !room.players[pid]) break;
 
         delete room.players[pid];
         room.order = room.order.filter((id) => id !== pid);
-        if (room.hostId === pid) room.hostId = room.order[0] || null; // promote next player
+        if (room.hostId === pid) room.hostId = room.order[0] || null;
 
         if (room.order.length === 0) {
-          // last one out — free the room (and its code) entirely
+          this.room = null;
           await this.state.storage.deleteAlarm();
           await this.state.storage.deleteAll();
         } else {
-          await this.saveRoom(room);
-          await this.broadcast(room);
+          // If it was their turn and it hadn't started, hand it to the next player.
+          if (room.phase === 'ready' && room.turn && room.turn.describerId === pid) {
+            engine.advanceTurn(room);
+          }
+          this.broadcast();
+          await this.persist();
         }
         break;
       }
@@ -126,10 +216,9 @@ export class GameRoom {
       case 'kickPlayer': {
         if (!room || att.playerId !== room.hostId) return; // host only
         const target = msg.playerId;
-        if (!target || target === room.hostId || !room.players[target]) return; // can't kick self / unknown
+        if (!target || target === room.hostId || !room.players[target]) return;
         delete room.players[target];
         room.order = room.order.filter((id) => id !== target);
-        // Tell the kicked player and neutralize their socket(s).
         for (const s of this.state.getWebSockets()) {
           const a = s.deserializeAttachment() || {};
           if (a.playerId === target) {
@@ -138,24 +227,15 @@ export class GameRoom {
             s.serializeAttachment(a);
           }
         }
-        await this.saveRoom(room);
-        await this.broadcast(room);
-        break;
-      }
-
-      case 'guess': {
-        if (!room) return;
-        const res = engine.applyGuess(room, att.playerId, msg.text);
-        this.send(ws, { type: 'guessResult', text: msg.text, ...res });
-        if (res.status === 'exact' || res.status === 'close') {
-          await this.saveRoom(room);
-          await this.broadcast(room);
-          if (res.gameOver || res.allSolved) await this.endTurnNow(room, now);
+        if (room.phase === 'ready' && room.turn && room.turn.describerId === target) {
+          engine.advanceTurn(room);
         }
+        this.broadcast();
+        await this.persist();
         break;
       }
 
-      // host-only actions
+      // host lobby actions
       case 'addTeam':
       case 'removeTeam':
       case 'assignPlayer':
@@ -168,15 +248,14 @@ export class GameRoom {
         if (msg.type === 'startGame') {
           const chk = engine.startGame(room);
           if (!chk.ok) { this.send(ws, { type: 'error', message: chk.reason }); return; }
-          room.countdownEndsAt = now + COUNTDOWN_MS;
-          await this.saveRoom(room);
-          await this.broadcast(room);
-          await this.state.storage.setAlarm(room.countdownEndsAt);
+          // Sits in 'ready' until the first describer taps Start (no alarm).
+          this.broadcast();
+          await this.persist();
         } else if (msg.type === 'restart') {
           engine.restart(room);
           await this.state.storage.deleteAlarm();
-          await this.saveRoom(room);
-          await this.broadcast(room);
+          this.broadcast();
+          await this.persist();
         } else {
           if (room.phase !== 'lobby') return;
           if (msg.type === 'addTeam') engine.addTeam(room);
@@ -184,8 +263,8 @@ export class GameRoom {
           else if (msg.type === 'assignPlayer') engine.assignPlayer(room, msg.playerId, msg.teamId);
           else if (msg.type === 'renameTeam') engine.renameTeam(room, msg.teamId, msg.name);
           else if (msg.type === 'setSettings') engine.setSettings(room, msg);
-          await this.saveRoom(room);
-          await this.broadcast(room);
+          this.broadcast();
+          await this.persist();
         }
         break;
       }
@@ -194,21 +273,22 @@ export class GameRoom {
 
   async webSocketClose(ws) {
     const att = ws.deserializeAttachment() || {};
-    const room = await this.loadRoom();
+    const room = this.room;
     if (!room) return;
     const pl = att.playerId && room.players[att.playerId];
-    if (pl) {
+    if (pl && pl.connected) {
       pl.connected = false;
-      await this.saveRoom(room);
-      await this.broadcast(room);
+      this.broadcast();
+      await this.persist();
     }
   }
 
-  async webSocketError() { /* no-op */ }
+  async webSocketError() { /* close handler does the bookkeeping */ }
 
   // --- timer / phase transitions (single alarm per phase) ------------------
 
-  async endTurnNow(room, now) {
+  async endTurnNow(now) {
+    const room = this.room;
     engine.endTurn(room);
     if (room.phase === 'gameOver') {
       await this.state.storage.deleteAlarm();
@@ -216,28 +296,23 @@ export class GameRoom {
       room.revealEndsAt = now + REVEAL_MS;
       await this.state.storage.setAlarm(room.revealEndsAt);
     }
-    await this.saveRoom(room);
-    await this.broadcast(room);
+    this.broadcast();
+    await this.persist();
   }
 
   async alarm() {
-    const room = await this.loadRoom();
+    const room = this.room;
     if (!room) return;
     const now = Date.now();
 
-    if (room.phase === 'countdown') {
-      engine.activateTurn(room, now + room.settings.turnSeconds * 1000);
-      await this.saveRoom(room);
-      await this.broadcast(room);
-      await this.state.storage.setAlarm(room.turn.deadline);
-    } else if (room.phase === 'turn') {
-      await this.endTurnNow(room, now);
+    if (room.phase === 'turn') {
+      // Time's up.
+      await this.endTurnNow(now);
     } else if (room.phase === 'turnEnd') {
+      // Reveal finished — next turn waits in 'ready' for its describer.
       engine.advanceTurn(room);
-      room.countdownEndsAt = now + COUNTDOWN_MS;
-      await this.saveRoom(room);
-      await this.broadcast(room);
-      await this.state.storage.setAlarm(room.countdownEndsAt);
+      this.broadcast();
+      await this.persist();
     }
   }
 }
