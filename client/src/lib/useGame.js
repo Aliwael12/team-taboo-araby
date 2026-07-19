@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { playTurnStart, playTurnEnd } from './sound';
 
 const STORAGE_KEY = 'teamtaboo:session';
 const RECONNECT_BASE_MS = 350;
@@ -56,6 +57,7 @@ export function useGame() {
   const guessSeqRef = useRef(0);
   const guessListeners = useRef(new Set());
   const offsetRef = useRef(0);
+  const prevPhaseRef = useRef(null); // for turn-start/turn-end sound cues
 
   const setStatusBoth = useCallback((s) => { statusRef.current = s; setStatus(s); }, []);
 
@@ -74,6 +76,7 @@ export function useGame() {
     sessionRef.current = null;
     helloRef.current = null;
     queueRef.current = [];
+    prevPhaseRef.current = null;
     saveSession(null);
     try { wsRef.current && wsRef.current.close(); } catch {}
     setState(null);
@@ -138,6 +141,16 @@ export function useGame() {
         if (typeof msg.state.serverNow === 'number') {
           const off = msg.state.serverNow - Date.now();
           if (Math.abs(off - offsetRef.current) > 300) { offsetRef.current = off; setClockOffset(off); }
+        }
+        // Ambient turn-start / turn-end cues, fired once per phase transition
+        // for everyone in the room (per-guess sounds live where the guess
+        // itself is handled, in Turn.jsx).
+        const prevPhase = prevPhaseRef.current;
+        const nextPhase = msg.state.phase;
+        if (prevPhase !== nextPhase) {
+          if (nextPhase === 'turn') playTurnStart();
+          else if (nextPhase === 'turnEnd') playTurnEnd();
+          prevPhaseRef.current = nextPhase;
         }
         setState(msg.state);
         setStatusBoth('inroom');
@@ -258,6 +271,7 @@ export function useGame() {
     sessionRef.current = null;
     helloRef.current = null;
     queueRef.current = [];
+    prevPhaseRef.current = null;
     saveSession(null);
     // Give the leave frame a beat to flush before closing.
     setTimeout(() => { try { ws && ws.close(); } catch {} }, 80);
@@ -271,6 +285,7 @@ export function useGame() {
   const addTeam = useCallback(() => send({ type: 'addTeam' }), [send]);
   const removeTeam = useCallback((teamId) => send({ type: 'removeTeam', teamId }), [send]);
   const assignPlayer = useCallback((playerId, teamId) => send({ type: 'assignPlayer', playerId, teamId }), [send]);
+  const autoTeams = useCallback(() => send({ type: 'autoTeams' }), [send]);
   const kickPlayer = useCallback((playerId) => send({ type: 'kickPlayer', playerId }), [send]);
   const renameTeam = useCallback((teamId, name) => send({ type: 'renameTeam', teamId, name }), [send]);
   const setSettings = useCallback((s) => send({ type: 'setSettings', ...s }), [send]);
@@ -295,7 +310,7 @@ export function useGame() {
   return {
     connected, state, error, status, clockOffset, setError,
     createGame, joinGame, leave,
-    addTeam, removeTeam, assignPlayer, kickPlayer, renameTeam, setSettings,
+    addTeam, removeTeam, assignPlayer, autoTeams, kickPlayer, renameTeam, setSettings,
     startGame, startTurn, skipTurn, restart,
     submitGuess, onGuessResult,
   };

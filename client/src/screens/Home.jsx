@@ -1,87 +1,94 @@
 import { useState } from 'react';
+import { unlockAudio } from '../lib/sound';
 
 // Landing screen: create a new game, or join by code (prefilled from an invite).
 export default function Home({ initialCode, onCreate, onJoin, error, busy }) {
   const [name, setName] = useState('');
   const [code, setCode] = useState(initialCode || '');
-  const [mode, setMode] = useState(initialCode ? 'join' : 'choose'); // choose | create | join
+  const [joinOpen, setJoinOpen] = useState(!!initialCode);
+  const [howOpen, setHowOpen] = useState(false);
 
   const canCreate = name.trim().length > 0;
   const canJoin = name.trim().length > 0 && code.trim().length >= 3;
 
+  const host = () => {
+    unlockAudio();
+    onCreate(name.trim());
+  };
+  const join = () => {
+    unlockAudio();
+    onJoin(name.trim(), code.trim());
+  };
+
   return (
     <div className="app-shell flex flex-col items-center justify-center px-6 py-10">
       <div className="w-full max-w-sm">
-        {/* Hero */}
+        {/* Poster hero */}
         <div className="mb-9 text-center">
-          <div className="mb-3 inline-flex h-20 w-20 items-center justify-center rounded-[1.5rem] bg-violet-cyan text-4xl shadow-glow-violet">
-            🎯
-          </div>
-          <h1 className="font-display text-[2.75rem] font-black leading-none tracking-tight">
-            Team&nbsp;
-            <span className="bg-violet-cyan bg-clip-text text-transparent" style={{ WebkitTextFillColor: 'transparent' }}>
-              Taboo
-            </span>
-          </h1>
-          <p className="mt-3 text-white/55">Describe the words. Beat the clock.<br />Win as a team.</p>
+          <h1 className="font-display text-6xl leading-none text-sand text-glow-brass">Team Taboo</h1>
+          <div className="mx-auto mt-2 h-[3px] w-40 origin-left animate-sweep rounded-full bg-brass-solid" />
+          <p className="mt-4 text-sand/60">Describe the words. Beat the clock.<br />Win as a team.</p>
         </div>
 
-        <div className="glass p-5">
-          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.2em] text-white/40">Your name</label>
+        <div className="card p-5">
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.2em] text-sand/40">Your name</label>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. Alex"
             maxLength={20}
-            className="w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3.5 text-lg outline-none transition focus:border-neon-violet/60 focus:ring-2 focus:ring-neon-violet/30 placeholder:text-white/30"
+            className="w-full rounded-2xl border border-sand/10 bg-night-800 px-4 py-3.5 text-lg text-sand outline-none transition focus:border-brass/60 focus:ring-2 focus:ring-brass/30 placeholder:text-sand/30"
           />
 
-          {mode !== 'create' && (
-            <>
-              <label className="mb-1.5 mt-4 block text-[11px] font-semibold uppercase tracking-[0.2em] text-white/40">Room code</label>
-              <input
-                value={code}
-                onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
-                placeholder="ABCD"
-                maxLength={6}
-                className="w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3.5 text-center text-2xl font-bold uppercase tracking-[0.4em] outline-none transition focus:border-neon-cyan/60 focus:ring-2 focus:ring-neon-cyan/30 placeholder:tracking-[0.4em] placeholder:text-white/25"
-              />
-            </>
-          )}
-
           {error && (
-            <div className="mt-3 animate-popIn rounded-xl border border-neon-red/30 bg-neon-red/15 px-4 py-2.5 text-center text-sm text-neon-red">
+            <div className="mt-3 animate-popIn rounded-xl border border-chili/30 bg-chili/15 px-4 py-2.5 text-center text-sm text-sand">
               {error}
             </div>
           )}
 
           <div className="mt-5 space-y-2.5">
-            {mode === 'create' ? (
-              <>
-                <button disabled={!canCreate || busy} onClick={() => onCreate(name.trim())} className="btn-primary w-full py-4 text-lg">
-                  {busy ? 'Creating…' : '🎉 Create game'}
-                </button>
-                <button onClick={() => setMode('choose')} className="w-full py-2 text-sm text-white/45">← Back</button>
-              </>
-            ) : mode === 'join' ? (
-              <>
-                <button disabled={!canJoin || busy} onClick={() => onJoin(name.trim(), code.trim())} className="btn-lime w-full py-4 text-lg">
+            <button disabled={!canCreate || busy} onClick={host} className="btn-primary w-full py-4 text-xl">
+              {busy ? 'Creating…' : '🎉 Host a game'}
+            </button>
+            <button onClick={() => setJoinOpen((v) => !v)} className="btn-ghost w-full py-4 text-xl">
+              🔑 Join with a code
+            </button>
+
+            {joinOpen && (
+              <div className="animate-riseIn space-y-2.5 pt-1">
+                <input
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                  placeholder="ABCD"
+                  maxLength={6}
+                  autoFocus={!initialCode}
+                  className="w-full rounded-2xl border border-sand/10 bg-night-800 px-4 py-3.5 text-center text-2xl tracking-[0.4em] text-sand outline-none transition focus:border-teal/60 focus:ring-2 focus:ring-teal/30 placeholder:tracking-[0.4em] placeholder:text-sand/25"
+                />
+                <button disabled={!canJoin || busy} onClick={join} className="btn-teal w-full py-4 text-xl">
                   {busy ? 'Joining…' : '🚀 Join game'}
                 </button>
-                {!initialCode && (
-                  <button onClick={() => setMode('choose')} className="w-full py-2 text-sm text-white/45">← Back</button>
-                )}
-              </>
-            ) : (
-              <>
-                <button onClick={() => setMode('create')} className="btn-primary w-full py-4 text-lg">🎉 Host a new game</button>
-                <button onClick={() => setMode('join')} className="btn-ghost w-full py-4 text-lg">🔑 Join with a code</button>
-              </>
+              </div>
             )}
           </div>
         </div>
 
-        <p className="mt-6 text-center text-xs text-white/30">4+ players · 2+ teams · plays on any phone</p>
+        <div className="mt-4">
+          <button
+            onClick={() => setHowOpen((v) => !v)}
+            className="w-full text-center text-xs font-semibold uppercase tracking-[0.2em] text-sand/35"
+          >
+            {howOpen ? '▴ Hide' : '▾ How to play'}
+          </button>
+          {howOpen && (
+            <div className="animate-riseIn mt-2 space-y-1.5 rounded-2xl border border-sand/[0.06] bg-night-900/60 p-4 text-sm text-sand/60">
+              <p>🎤 Your team's describer gets 5 words and 40 seconds — no saying the word!</p>
+              <p>⌨️ Teammates type every guess (franco or عربي, both count) to score.</p>
+              <p>🏆 Exact = +2, close spelling = +1. First team to the target wins.</p>
+            </div>
+          )}
+        </div>
+
+        <p className="mt-5 text-center text-xs text-sand/30">4+ players · 2+ teams · plays on any phone</p>
       </div>
     </div>
   );

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import confetti from 'canvas-confetti';
-import Timer from '../components/Timer';
+import Timer, { useRemainingSeconds } from '../components/Timer';
+import ScoreStrip from '../components/ScoreStrip';
+import { playExact, playClose, playWrong } from '../lib/sound';
 
 export default function Turn({ state, clockOffset, actions }) {
   const role = state.turn ? state.turn.role : 'spectator';
@@ -9,25 +11,27 @@ export default function Turn({ state, clockOffset, actions }) {
   return <SpectatorView state={state} clockOffset={clockOffset} />;
 }
 
-// Renders a title in both scripts (whichever are present).
+// Renders a title in both scripts (whichever are present). Franco headline in
+// display type, Arabic beneath in RTL — or Arabic solo, RTL, when that's all
+// there is.
 export function TitleCard({ display, solved, dim = false, size = 'lg' }) {
   const fr = display && display.fr;
   const ar = display && display.ar;
   const main = fr || ar;
   const sub = fr && ar ? ar : null;
   const mainIsAr = !fr && ar;
-  const mainSize = size === 'lg' ? 'text-2xl' : 'text-lg';
+  const mainSize = size === 'lg' ? 'text-3xl' : 'text-xl';
   const muted = solved || dim;
   return (
     <div className={`min-w-0 ${dim ? 'opacity-50' : ''}`}>
       <div
         dir={mainIsAr ? 'rtl' : 'auto'}
-        className={`font-display ${mainSize} font-bold leading-tight ${solved ? 'text-white/40 line-through' : ''}`}
+        className={`font-display ${mainSize} leading-tight ${solved ? 'text-sand/40 line-through' : 'text-sand'}`}
       >
         {main}
       </div>
       {sub && (
-        <div dir="rtl" className={`mt-0.5 text-base leading-tight ${muted ? 'text-white/25' : 'text-white/55'}`}>
+        <div dir="rtl" className={`mt-0.5 text-base leading-tight ${muted ? 'text-sand/25' : 'text-sand/55'}`}>
           {sub}
         </div>
       )}
@@ -35,12 +39,13 @@ export function TitleCard({ display, solved, dim = false, size = 'lg' }) {
   );
 }
 
-// Green +2 for an exact hit, amber +1 for a right-but-misspelled one.
+// Mint +2 for an exact hit, amber +1 for a right-but-misspelled one.
 function PointsBadge({ points }) {
   const close = points === 1;
   return (
-    <span className={`chip shrink-0 text-sm font-bold ${close ? 'bg-neon-amber/20 text-neon-amber' : 'bg-neon-green/20 text-neon-green'}`}>
-      +{points}{close ? ' ~' : ''}
+    <span className={`chip shrink-0 text-sm font-bold ${close ? 'bg-amber/20 text-amber' : 'bg-mint/20 text-mint'}`}>
+      +{points}
+      {close ? ' ~' : ''}
     </span>
   );
 }
@@ -54,8 +59,8 @@ function ProgressDots({ total, solved }) {
           className="h-2 flex-1 rounded-full transition-all duration-300"
           style={
             i < solved
-              ? { background: '#4ade80', boxShadow: '0 0 10px #4ade80' }
-              : { background: 'rgba(255,255,255,0.1)' }
+              ? { background: '#5FD68A', boxShadow: '0 0 10px #5FD68A' }
+              : { background: 'rgba(244,232,216,0.1)' }
           }
         />
       ))}
@@ -63,39 +68,56 @@ function ProgressDots({ total, solved }) {
   );
 }
 
+// A soft chili glow that fades in around the screen edges — the visual half
+// of the "last 10 seconds" cue (the audible half lives in <Timer/>).
+function EdgeGlow({ active }) {
+  if (!active) return null;
+  return (
+    <div
+      className="pointer-events-none fixed inset-0 z-0 animate-pulseEdge"
+      style={{ boxShadow: 'inset 0 0 90px -10px rgba(228,87,46,0.55)' }}
+    />
+  );
+}
+
 // ---- Describer: sees the 5 words, watches them get crossed off ----
 function DescriberView({ state, clockOffset }) {
-  const { turn } = state;
+  const { turn, teams } = state;
   const total = state.settings.turnSeconds;
   const solved = turn.words.filter((w) => w.solved).length;
+  const remaining = useRemainingSeconds(turn.deadline, clockOffset);
+  const danger = remaining != null && remaining <= 10;
 
   return (
-    <div className="app-shell mx-auto flex w-full max-w-md flex-col px-4 py-4">
-      <div className="mb-3 flex items-center justify-between">
+    <div className="app-shell relative mx-auto flex w-full max-w-md flex-col px-4 py-4">
+      <EdgeGlow active={danger} />
+      <div className="relative z-10 mb-3">
+        <ScoreStrip teams={teams} activeTeamId={turn.teamId} />
+      </div>
+
+      <div className="relative z-10 mb-3 flex items-center justify-between">
         <div>
-          <div className="chip bg-neon-lime/15 text-neon-lime">🎤 You're describing</div>
-          <div className="mt-1 pl-1 text-sm text-white/45">{solved}/{turn.total} guessed</div>
+          <div className="chip bg-mint/15 text-mint">🎤 You're describing</div>
+          <div className="mt-1 pl-1 text-sm text-sand/45">{solved}/{turn.total} guessed</div>
         </div>
         <Timer deadline={turn.deadline} total={total} offset={clockOffset} size={78} />
       </div>
 
-      <div className="glass-soft mb-3 px-4 py-2.5 text-center text-sm text-white/70">
-        Describe these to your team — <b className="text-white">don't say the word!</b>
+      <div className="card-soft relative z-10 mb-3 px-4 py-2.5 text-center text-sm text-sand/70">
+        Describe these to your team — <b className="text-sand">don't say the word!</b>
       </div>
 
-      <div className="flex-1 space-y-2.5">
+      <div className="relative z-10 flex-1 space-y-2.5">
         {turn.words.map((w, i) => (
           <div
             key={i}
             className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3.5 transition-all duration-300 ${
-              w.solved
-                ? 'animate-popIn border-neon-green/40 bg-neon-green/10'
-                : 'border-white/10 bg-white/[0.05]'
+              w.solved ? 'animate-popIn border-mint/40 bg-mint/10' : 'border-sand/10 bg-night-800'
             }`}
-            style={w.solved ? { boxShadow: '0 0 22px -8px #4ade80' } : undefined}
+            style={w.solved ? { boxShadow: '0 0 22px -8px #5FD68A' } : undefined}
           >
             <TitleCard display={w.display} solved={w.solved} />
-            {w.solved ? <PointsBadge points={w.points} /> : <span className="text-2xl text-white/15">?</span>}
+            {w.solved ? <PointsBadge points={w.points} /> : <span className="text-2xl text-sand/15">؟</span>}
           </div>
         ))}
       </div>
@@ -105,7 +127,7 @@ function DescriberView({ state, clockOffset }) {
 
 // ---- Guesser: scratchpad. Type a word, Enter to submit. Unlimited guesses. ----
 function GuesserView({ state, clockOffset, actions }) {
-  const { turn } = state;
+  const { turn, teams } = state;
   const total = state.settings.turnSeconds;
   const [text, setText] = useState('');
   const [entries, setEntries] = useState([]); // { id, text, status } — status 'pending' until the server rules
@@ -133,15 +155,19 @@ function GuesserView({ state, clockOffset, actions }) {
         try {
           if (navigator.vibrate) navigator.vibrate(payload.status === 'exact' ? 30 : 15);
         } catch {}
+        if (payload.status === 'exact') playExact();
+        else playClose();
         confetti({
           particleCount: payload.status === 'exact' ? 28 : 12,
           spread: 60,
           startVelocity: 32,
           origin: { y: 0.75 },
-          colors: payload.status === 'exact' ? ['#4ade80', '#22d3ee', '#a855f7'] : ['#fbbf24'],
+          colors: payload.status === 'exact' ? ['#5FD68A', '#2EC4B6', '#FFC46B'] : ['#FFC53D'],
           scalar: 0.8,
           disableForReducedMotion: true,
         });
+      } else if (payload.status === 'none') {
+        playWrong();
       }
     });
   }, [actions]);
@@ -174,14 +200,17 @@ function GuesserView({ state, clockOffset, actions }) {
       {flash && (
         <div
           className="pointer-events-none fixed inset-0 -z-0 animate-popIn"
-          style={{ background: `radial-gradient(circle at 50% 70%, ${flash === 'exact' ? '#4ade8033' : '#fbbf2433'}, transparent 60%)` }}
+          style={{ background: `radial-gradient(circle at 50% 70%, ${flash === 'exact' ? '#5FD68A33' : '#FFC53D33'}, transparent 60%)` }}
         />
       )}
+      <div className="mb-3">
+        <ScoreStrip teams={teams} activeTeamId={turn.teamId} />
+      </div>
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <div className="chip bg-neon-cyan/15 text-neon-cyan">⌨️ Guess the words</div>
-          <div className="mt-1 pl-1 text-sm text-white/45">
-            <b className="text-white/70">{turn.describerName}</b> is describing · {solved}/{turn.total} found
+          <div className="chip bg-teal/15 text-teal">⌨️ Guess the words</div>
+          <div className="mt-1 pl-1 text-sm text-sand/45">
+            <b className="text-sand/70">{turn.describerName}</b> is describing · {solved}/{turn.total} found
           </div>
         </div>
         <Timer deadline={turn.deadline} total={total} offset={clockOffset} size={76} />
@@ -193,13 +222,15 @@ function GuesserView({ state, clockOffset, actions }) {
 
       <div ref={listRef} className="no-scrollbar mb-3 flex-1 space-y-1.5 overflow-y-auto">
         {entries.length === 0 && (
-          <div className="mt-10 px-6 text-center text-sm text-white/35">
-            Shout out guesses as single words — type each one and hit&nbsp;<b className="text-white/60">Enter</b>. Unlimited tries!
+          <div className="mt-10 px-6 text-center text-sm text-sand/35">
+            Shout out guesses as single words — type each one and hit&nbsp;<b className="text-sand/60">Enter</b>.
+            <br />
+            <b className="text-sand/60">franco or عربي — both count!</b> Unlimited tries.
           </div>
         )}
         {entries.map((e) => (
           <div key={e.id} className={`flex animate-popIn items-center justify-between rounded-xl px-3.5 py-2.5 text-sm ${statusStyle(e.status)}`}>
-            <span className="truncate font-medium">{e.text}</span>
+            <span className="truncate font-medium" dir="auto">{e.text}</span>
             <span className="ml-2 shrink-0 font-semibold">{statusLabel(e.status)}</span>
           </div>
         ))}
@@ -215,10 +246,11 @@ function GuesserView({ state, clockOffset, actions }) {
           autoCapitalize="none"
           spellCheck={false}
           enterKeyHint="send"
+          dir="auto"
           placeholder="Type a guess…"
-          className="flex-1 rounded-2xl border border-white/10 bg-white/[0.07] px-4 py-4 text-lg outline-none transition focus:border-neon-cyan/60 focus:ring-2 focus:ring-neon-cyan/30 placeholder:text-white/30"
+          className="flex-1 rounded-2xl border border-sand/10 bg-night-800 px-4 py-4 text-lg text-sand outline-none transition focus:border-teal/60 focus:ring-2 focus:ring-teal/30 placeholder:text-sand/30"
         />
-        <button type="submit" className="btn-primary px-6 text-xl">↵</button>
+        <button type="submit" className="btn-teal px-6 text-xl">↵</button>
       </form>
     </div>
   );
@@ -226,20 +258,23 @@ function GuesserView({ state, clockOffset, actions }) {
 
 // ---- Spectator (opposing team): watches the words + how each gets marked ----
 function SpectatorView({ state, clockOffset }) {
-  const { turn } = state;
+  const { turn, teams } = state;
   const total = state.settings.turnSeconds;
   const words = turn.words || [];
   const solved = turn.solvedCount || 0;
 
   return (
     <div className="app-shell mx-auto flex w-full max-w-md flex-col px-4 py-4">
+      <div className="mb-3">
+        <ScoreStrip teams={teams} activeTeamId={turn.teamId} />
+      </div>
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <div className="chip bg-white/[0.06] text-white/60" style={{ boxShadow: `0 0 16px -8px ${turn.teamColor}` }}>
+          <div className="chip bg-night-800 text-sand/60" style={{ boxShadow: `0 0 16px -8px ${turn.teamColor}` }}>
             👀 Watching <b style={{ color: turn.teamColor }} className="ml-1">{turn.teamName}</b>
           </div>
-          <div className="mt-1 pl-1 text-sm text-white/45">
-            <b className="text-white/70">{turn.describerName}</b> is describing · {solved}/{turn.total} found
+          <div className="mt-1 pl-1 text-sm text-sand/45">
+            <b className="text-sand/70">{turn.describerName}</b> is describing · {solved}/{turn.total} found
           </div>
         </div>
         <Timer deadline={turn.deadline} total={total} offset={clockOffset} size={66} />
@@ -250,12 +285,12 @@ function SpectatorView({ state, clockOffset }) {
           <div
             key={i}
             className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3.5 transition-all duration-300 ${
-              w.solved ? 'animate-popIn border-neon-green/40 bg-neon-green/10' : 'border-white/10 bg-white/[0.05]'
+              w.solved ? 'animate-popIn border-mint/40 bg-mint/10' : 'border-sand/10 bg-night-800'
             }`}
-            style={w.solved ? { boxShadow: '0 0 22px -8px #4ade80' } : undefined}
+            style={w.solved ? { boxShadow: '0 0 22px -8px #5FD68A' } : undefined}
           >
             <TitleCard display={w.display} solved={w.solved} />
-            {w.solved ? <PointsBadge points={w.points} /> : <span className="text-2xl text-white/15">?</span>}
+            {w.solved ? <PointsBadge points={w.points} /> : <span className="text-2xl text-sand/15">؟</span>}
           </div>
         ))}
       </div>
@@ -266,16 +301,16 @@ function SpectatorView({ state, clockOffset }) {
 function statusStyle(status) {
   switch (status) {
     case 'exact':
-      return 'bg-neon-green/15 text-neon-green ring-1 ring-neon-green/30';
+      return 'bg-mint/15 text-mint ring-1 ring-mint/30';
     case 'close':
-      return 'bg-neon-amber/15 text-neon-amber ring-1 ring-neon-amber/30';
+      return 'bg-amber/15 text-amber ring-1 ring-amber/30';
     case 'duplicate':
     case 'inactive':
-      return 'bg-white/[0.04] text-white/45';
+      return 'bg-sand/[0.04] text-sand/45';
     case 'pending':
-      return 'bg-white/[0.05] text-white/40';
+      return 'bg-sand/[0.05] text-sand/40';
     default:
-      return 'bg-white/[0.05] text-white/50';
+      return 'bg-sand/[0.05] text-sand/50';
   }
 }
 function statusLabel(status) {

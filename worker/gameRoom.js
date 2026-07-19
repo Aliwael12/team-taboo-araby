@@ -239,6 +239,7 @@ export class GameRoom {
       case 'addTeam':
       case 'removeTeam':
       case 'assignPlayer':
+      case 'autoTeams':
       case 'renameTeam':
       case 'setSettings':
       case 'startGame':
@@ -261,6 +262,7 @@ export class GameRoom {
           if (msg.type === 'addTeam') engine.addTeam(room);
           else if (msg.type === 'removeTeam') engine.removeTeam(room, msg.teamId);
           else if (msg.type === 'assignPlayer') engine.assignPlayer(room, msg.playerId, msg.teamId);
+          else if (msg.type === 'autoTeams') engine.autoTeams(room);
           else if (msg.type === 'renameTeam') engine.renameTeam(room, msg.teamId, msg.name);
           else if (msg.type === 'setSettings') engine.setSettings(room, msg);
           this.broadcast();

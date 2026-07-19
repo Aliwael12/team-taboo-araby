@@ -146,10 +146,23 @@ function renameTeam(room, teamId, name) {
 
 function addPlayer(room, name) {
   const clean = String(name || '').trim().slice(0, 20) || 'Player';
-  const player = { id: genId(8), name: clean, teamId: null, connected: true, socketId: null };
+  const player = { id: genId(8), name: clean, teamId: null, connected: true, socketId: null, points: 0 };
   room.players[player.id] = player;
   room.order.push(player.id);
   return player;
+}
+
+// Host convenience: shuffle every current player across the existing teams
+// as evenly as possible. Does not create/remove teams or touch phase — the
+// caller (gameRoom.js) enforces host-only + lobby-only, matching the other
+// lobby mutators below.
+function autoTeams(room) {
+  if (room.teams.length < 1) return false;
+  const shuffled = shuffle(room.order);
+  shuffled.forEach((pid, i) => {
+    room.players[pid].teamId = room.teams[i % room.teams.length].id;
+  });
+  return true;
 }
 
 function assignPlayer(room, playerId, teamId) {
@@ -298,6 +311,7 @@ function applyGuess(room, playerId, text) {
     w.solvedById = playerId;
     const team = room.teams.find((t) => t.id === room.turn.teamId);
     team.score += w.points;
+    p.points = (p.points || 0) + w.points;
     return {
       status: res.status,
       index: res.index,
@@ -340,6 +354,31 @@ function restart(room) {
   room.teamOrder = [];
   room.rosters = {};
   for (const t of room.teams) t.score = 0;
+  for (const p of Object.values(room.players)) p.points = 0;
+}
+
+// Non-mutating preview of who describes next (shown on the turnEnd reveal so
+// the next describer is already reaching for their phone). Applies the same
+// "skip players who left" logic as setupTurn, without touching room state.
+function peekNextDescriber(room) {
+  if (room.phase === 'gameOver' || !room.teamOrder.length) return null;
+  let idx = room.turnIndex + 1;
+  let sel = describerFor(room, idx);
+  let guard = 0;
+  while (!room.players[sel.describerId] && guard < 128) {
+    idx++;
+    sel = describerFor(room, idx);
+    guard++;
+  }
+  const team = room.teams.find((t) => t.id === sel.teamId);
+  const describer = room.players[sel.describerId];
+  return {
+    teamId: sel.teamId,
+    teamName: team && team.name,
+    teamColor: team && team.color,
+    describerId: sel.describerId,
+    describerName: (describer && describer.name) || 'A player',
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +407,7 @@ function redactStateFor(room, playerId) {
     settings: room.settings,
     players: room.order.map((id) => {
       const p = room.players[id];
-      return { id: p.id, name: p.name, teamId: p.teamId, connected: p.connected, isHost: id === room.hostId };
+      return { id: p.id, name: p.name, teamId: p.teamId, connected: p.connected, isHost: id === room.hostId, points: p.points || 0 };
     }),
     teams: room.teams.map((t) => ({
       id: t.id, name: t.name, color: t.color, score: t.score, playerIds: teamPlayers(room, t.id),
@@ -418,13 +457,14 @@ function redactStateFor(room, playerId) {
       }
     }
     state.turn = turn;
+    if (room.phase === 'turnEnd') state.nextUp = peekNextDescriber(room);
   }
 
   return state;
 }
 
 module.exports = {
-  createRoom, addTeam, removeTeam, renameTeam, addPlayer, assignPlayer,
+  createRoom, addTeam, removeTeam, renameTeam, addPlayer, assignPlayer, autoTeams,
   teamPlayers, setSettings, canStart, startGame, setupTurn, activateTurn,
   applyGuess, endTurn, advanceTurn, restart, redactStateFor, roleFor,
   fullPool,

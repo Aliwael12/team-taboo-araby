@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useGame, codeFromUrl } from './lib/useGame';
+import { unlockAudio, isMuted, toggleMuted } from './lib/sound';
 import Backdrop from './components/Backdrop';
 import Home from './screens/Home';
 import Lobby from './screens/Lobby';
@@ -15,6 +16,14 @@ export default function App() {
   const urlCode = codeFromUrl();
   const { state, status, connected, clockOffset } = game;
 
+  // Unlock the WebAudio context on the very first tap anywhere, in case a
+  // player's entry point skips Home entirely (e.g. resuming a saved session).
+  useEffect(() => {
+    const unlock = () => unlockAudio();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    return () => window.removeEventListener('pointerdown', unlock);
+  }, []);
+
   // Stable identity: screens subscribe to guess results in an effect keyed on
   // `actions`, so this must not change on every render.
   const actions = useMemo(
@@ -22,6 +31,7 @@ export default function App() {
       addTeam: game.addTeam,
       removeTeam: game.removeTeam,
       assignPlayer: game.assignPlayer,
+      autoTeams: game.autoTeams,
       kickPlayer: game.kickPlayer,
       renameTeam: game.renameTeam,
       setSettings: game.setSettings,
@@ -34,7 +44,7 @@ export default function App() {
       leave: game.leave,
     }),
     [
-      game.addTeam, game.removeTeam, game.assignPlayer, game.kickPlayer,
+      game.addTeam, game.removeTeam, game.assignPlayer, game.autoTeams, game.kickPlayer,
       game.renameTeam, game.setSettings, game.startGame, game.startTurn,
       game.skipTurn, game.restart, game.submitGuess, game.onGuessResult, game.leave,
     ]
@@ -87,21 +97,39 @@ export default function App() {
         {body}
       </div>
       {status === 'inroom' && inGame && (
-        <button
-          onClick={() => { if (window.confirm('Leave this room?')) game.leave(); }}
-          className="fixed bottom-3 left-3 z-40 rounded-full border border-white/10 bg-black/40 px-3 py-1.5 text-xs font-medium text-white/60 backdrop-blur-md active:scale-95"
-        >
-          ✕ Leave
-        </button>
+        <>
+          <MuteToggle />
+          <button
+            onClick={() => { if (window.confirm('Leave this room?')) game.leave(); }}
+            className="fixed bottom-3 left-3 z-40 rounded-full border border-sand/10 bg-night-950/60 px-3 py-1.5 text-xs font-medium text-sand/60 backdrop-blur-md active:scale-95"
+          >
+            ✕ Leave
+          </button>
+        </>
       )}
-      <ConnectionBadge connected={connected} />
+      {status !== 'idle' && <ConnectionBadge connected={connected} />}
     </>
+  );
+}
+
+// Small always-reachable mute control, kept out of thumb-flow (top-right).
+function MuteToggle() {
+  const [muted, setMuted] = useState(isMuted());
+  return (
+    <button
+      onClick={() => setMuted(toggleMuted())}
+      aria-label={muted ? 'Unmute sound' : 'Mute sound'}
+      className="fixed right-3 top-3 z-40 grid h-9 w-9 place-items-center rounded-full border border-sand/10 bg-night-950/60 text-base text-sand/70 backdrop-blur-md active:scale-90"
+      style={{ top: 'max(0.75rem, env(safe-area-inset-top))' }}
+    >
+      {muted ? '🔇' : '🔊'}
+    </button>
   );
 }
 
 function Loading() {
   return (
-    <div className="app-shell flex items-center justify-center text-white/40">
+    <div className="app-shell flex items-center justify-center text-sand/40">
       <div className="animate-pulseGlow font-display">Loading…</div>
     </div>
   );
@@ -110,7 +138,7 @@ function Loading() {
 function ConnectionBadge({ connected }) {
   if (connected) return null;
   return (
-    <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full border border-neon-red/40 bg-neon-red/20 px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-md">
+    <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full border border-chili/40 bg-chili/20 px-4 py-1.5 text-sm font-semibold text-sand backdrop-blur-md">
       ● Reconnecting…
     </div>
   );

@@ -1,36 +1,39 @@
-// Fixed, animated gradient-mesh background. Slowly drifting blurred neon blobs
-// over near-black, plus a faint grid — the signature "arcade" atmosphere.
+// Fixed, GPU-cheap background: a night base, a faint khayamiya (tentmaker
+// appliqué) star-and-lattice tile, ONE ambient glow that drifts via a
+// transform-only animation (no blur re-paint per frame), and a top vignette
+// for status-bar legibility. Tints toward the active team's color mid-game.
 export default function Backdrop({ tint }) {
   return (
-    <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden bg-ink-950">
+    <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden bg-night-950">
+      {/* single drifting glow — brass/teal by default, shifts to the active team color */}
       <div
-        className="absolute -left-[20%] -top-[15%] h-[55vh] w-[55vh] rounded-full bg-neon-violet/30 blur-[90px] animate-drift1"
-      />
-      <div
-        className="absolute -right-[20%] top-[10%] h-[50vh] w-[50vh] rounded-full bg-neon-cyan/25 blur-[90px] animate-drift2"
-      />
-      <div
-        className="absolute bottom-[-20%] left-[15%] h-[55vh] w-[55vh] rounded-full bg-neon-pink/20 blur-[100px] animate-drift3"
-      />
-      {tint && (
-        <div
-          className="absolute left-1/2 top-1/3 h-[60vh] w-[60vh] -translate-x-1/2 rounded-full blur-[110px] opacity-30 transition-colors duration-700"
-          style={{ background: tint }}
-        />
-      )}
-      {/* faint grid overlay */}
-      <div
-        className="absolute inset-0 opacity-[0.05]"
+        className="absolute left-1/2 top-[38%] h-[70vmax] w-[70vmax] animate-driftGlow rounded-full blur-[70px] transition-[background] duration-1000"
         style={{
-          backgroundImage:
-            'linear-gradient(rgba(255,255,255,0.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.6) 1px, transparent 1px)',
-          backgroundSize: '44px 44px',
-          maskImage: 'radial-gradient(ellipse at 50% 40%, black 40%, transparent 85%)',
-          WebkitMaskImage: 'radial-gradient(ellipse at 50% 40%, black 40%, transparent 85%)',
+          background: tint
+            ? `radial-gradient(circle, ${tint}33 0%, ${tint}00 70%)`
+            : 'radial-gradient(circle, rgba(232,163,61,0.18) 0%, rgba(46,196,182,0.10) 45%, transparent 72%)',
         }}
       />
-      {/* top vignette for status-bar legibility */}
-      <div className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-black/50 to-transparent" />
+
+      {/* khayamiya star-and-lattice tile, ~4% sand opacity */}
+      <svg className="absolute inset-0 h-full w-full opacity-[0.05]" preserveAspectRatio="none">
+        <defs>
+          <pattern id="khayamiya" width="80" height="80" patternUnits="userSpaceOnUse">
+            {/* corner squares (combine across tiles into full diamonds-in-a-grid) */}
+            <rect x="-8" y="-8" width="16" height="16" fill="none" stroke="#F4E8D8" strokeWidth="1.5" />
+            <rect x="72" y="-8" width="16" height="16" fill="none" stroke="#F4E8D8" strokeWidth="1.5" />
+            <rect x="-8" y="72" width="16" height="16" fill="none" stroke="#F4E8D8" strokeWidth="1.5" />
+            <rect x="72" y="72" width="16" height="16" fill="none" stroke="#F4E8D8" strokeWidth="1.5" />
+            {/* center star (rotated square) */}
+            <path d="M40,10 L70,40 L40,70 L10,40 Z" fill="none" stroke="#F4E8D8" strokeWidth="1.5" />
+            <path d="M40,24 L56,40 L40,56 L24,40 Z" fill="none" stroke="#F4E8D8" strokeWidth="1" />
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#khayamiya)" />
+      </svg>
+
+      {/* top vignette so status bars / floating chips stay legible */}
+      <div className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-black/45 to-transparent" />
     </div>
   );
 }
