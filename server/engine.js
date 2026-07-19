@@ -294,7 +294,7 @@ function activateTurn(room, deadline) {
 }
 
 // A guesser submits a word. Mutates state on a hit. Returns a result describing
-// what happened (status: exact|close|duplicate|none|<error>).
+// what happened (status: exact|close|upgrade|duplicate|none|<error>).
 function applyGuess(room, playerId, text) {
   if (room.phase !== 'turn' || !room.turn) return { status: 'inactive' };
   const p = room.players[playerId];
@@ -317,6 +317,27 @@ function applyGuess(room, playerId, text) {
       index: res.index,
       word: w.display.fr || w.display.ar,
       points: w.points,
+      teamScore: team.score,
+      allSolved: room.turn.words.every((x) => x.solved),
+      gameOver: team.score >= room.settings.targetScore,
+    };
+  }
+  if (res.status === 'upgrade') {
+    // Corrected retype of a word that only scored 'close': promote it to a
+    // full exact. The missing point goes to whoever typed the correction;
+    // solvedById stays with the original solver.
+    const w = room.turn.words[res.index];
+    const delta = 2 - (w.points || 0);
+    w.status = 'exact';
+    w.points = 2;
+    const team = room.teams.find((t) => t.id === room.turn.teamId);
+    team.score += delta;
+    p.points = (p.points || 0) + delta;
+    return {
+      status: 'upgrade',
+      index: res.index,
+      word: w.display.fr || w.display.ar,
+      points: delta,
       teamScore: team.score,
       allSolved: room.turn.words.every((x) => x.solved),
       gameOver: team.score >= room.settings.targetScore,

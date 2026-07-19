@@ -145,17 +145,20 @@ export class GameRoom {
         const res = engine.applyGuess(room, att.playerId, msg.text);
         // Ack instantly — before any persistence or broadcasting.
         this.send(ws, { type: 'guessResult', id: msg.id, text: msg.text, ...res });
-        if (res.status === 'exact' || res.status === 'close') {
+        if (res.status === 'exact' || res.status === 'close' || res.status === 'upgrade') {
           if (res.gameOver || res.allSolved) {
             await this.endTurnNow(now); // single phase broadcast covers the word too
           } else {
-            const solver = room.players[att.playerId];
+            // Broadcast the word's CURRENT points/status (an upgrade promotes a
+            // 'close' +1 to a full 'exact' +2) and its original solver's name.
+            const w = room.turn.words[res.index];
+            const solver = room.players[w.solvedById] || room.players[att.playerId];
             this.broadcastEvent({
               type: 'wordSolved',
               turnIndex: room.turn.index,
               index: res.index,
-              points: res.points,
-              status: res.status,
+              points: w.points,
+              status: w.status,
               solvedByName: solver ? solver.name : null,
               teamId: room.turn.teamId,
               teamScore: res.teamScore,

@@ -99,9 +99,11 @@ export default function App() {
       {status === 'inroom' && inGame && (
         <>
           <MuteToggle />
+          {/* Sits beside the mute toggle, clear of the guess input and word list. */}
           <button
             onClick={() => { if (window.confirm('Leave this room?')) game.leave(); }}
-            className="fixed bottom-3 left-3 z-40 rounded-full border border-sand/10 bg-night-950/60 px-3 py-1.5 text-xs font-medium text-sand/60 backdrop-blur-md active:scale-95"
+            className="fixed right-14 z-40 inline-flex h-9 items-center rounded-full border border-sand/10 bg-night-950/60 px-3 text-xs font-medium text-sand/60 backdrop-blur-md active:scale-95"
+            style={{ top: 'max(0.75rem, env(safe-area-inset-top))' }}
           >
             ✕ Leave
           </button>

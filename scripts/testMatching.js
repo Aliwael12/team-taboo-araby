@@ -52,6 +52,17 @@ words[0].solved = true;
 eq('already-solved -> duplicate', scoreOne('Tito').status, 'duplicate');
 words[0].solved = false;
 
+// upgrade: a word caught as a misspelling ('close'), then retyped correctly,
+// promotes to full credit instead of counting as a duplicate
+words[0].solved = true;
+words[0].status = 'close';
+eq('corrected retype of close -> upgrade', JSON.stringify(scoreOne('Tito')), JSON.stringify({ status: 'upgrade', index: 0 }));
+eq('another typo of close solve -> duplicate', scoreOne('Titoo').status, 'duplicate');
+words[0].status = 'exact';
+eq('exact retype of exact solve -> duplicate', scoreOne('Tito').status, 'duplicate');
+delete words[0].status;
+words[0].solved = false;
+
 // index correctness
 eq('exact returns right index', scoreOne('Suits').index, 4);
 

@@ -4,6 +4,7 @@
 // Scoring:
 //   - exact (normalized) match of ANY accepted form -> 2 points
 //   - correct but misspelled (length-scaled edit distance) -> 1 point
+//   - exact retype of a word that only scored 'close' -> "upgrade" (+1 to full credit)
 //   - already-solved word -> "duplicate"
 //   - no match -> "none"
 
@@ -106,13 +107,14 @@ function matchAgainstForms(guessNorm, forms) {
 }
 
 // Score a raw guess against the current words.
-// words: [{ forms: [normalizedForm, ...], solved }]
+// words: [{ forms: [normalizedForm, ...], solved, status? }]
 // Returns { status, index }.
 function scoreGuess(rawGuess, words) {
   const g = normalize(rawGuess);
   if (!g) return { status: 'none', index: -1 };
 
   let best = null; // { index, type, rank, dist }
+  let upgrade = -1;   // exact hit on a word previously solved as 'close'
   let duplicate = -1;
 
   for (let i = 0; i < words.length; i++) {
@@ -120,6 +122,9 @@ function scoreGuess(rawGuess, words) {
     const m = matchAgainstForms(g, w.forms || []);
     if (!m) continue;
     if (w.solved) {
+      // Typing the CORRECT spelling of a word that was only caught as a
+      // misspelling upgrades it to full credit; anything else is a duplicate.
+      if (m.type === 'exact' && w.status === 'close' && upgrade === -1) upgrade = i;
       if (duplicate === -1) duplicate = i;
       continue;
     }
@@ -128,6 +133,10 @@ function scoreGuess(rawGuess, words) {
     }
   }
 
+  // Exact intent wins: a clean exact on an open word first, then the corrected
+  // retype of a 'close' solve, then fuzzy matches on open words.
+  if (best && best.type === 'exact') return { status: 'exact', index: best.index };
+  if (upgrade !== -1) return { status: 'upgrade', index: upgrade };
   if (best) return { status: best.type, index: best.index };
   if (duplicate !== -1) return { status: 'duplicate', index: duplicate };
   return { status: 'none', index: -1 };

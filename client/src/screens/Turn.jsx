@@ -125,6 +125,31 @@ function DescriberView({ state, clockOffset }) {
   );
 }
 
+// Height of the VISIBLE viewport — shrinks when the mobile keyboard opens.
+// Sizing the guesser screen to this keeps the timer pinned on-screen and the
+// input box sitting right above the keyboard instead of hidden behind it.
+function useVisibleViewportHeight() {
+  const [height, setHeight] = useState(null);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      setHeight(vv.height);
+      // iOS "helpfully" scrolls the page to reveal a focused input, shoving
+      // the timer off-screen — pin the page back to the top.
+      if (window.scrollY) window.scrollTo(0, 0);
+    };
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, []);
+  return height;
+}
+
 // ---- Guesser: scratchpad. Type a word, Enter to submit. Unlimited guesses. ----
 function GuesserView({ state, clockOffset, actions }) {
   const { turn, teams } = state;
@@ -149,20 +174,22 @@ function GuesserView({ state, clockOffset, actions }) {
         copy[i] = { ...copy[i], status: payload.status };
         return copy;
       });
-      if (payload.status === 'exact' || payload.status === 'close') {
-        setFlash(payload.status);
+      // 'upgrade' = a corrected retype of a misspelled hit — celebrate like an exact.
+      if (payload.status === 'exact' || payload.status === 'close' || payload.status === 'upgrade') {
+        const close = payload.status === 'close';
+        setFlash(close ? 'close' : 'exact');
         setTimeout(() => setFlash(null), 500);
         try {
-          if (navigator.vibrate) navigator.vibrate(payload.status === 'exact' ? 30 : 15);
+          if (navigator.vibrate) navigator.vibrate(close ? 15 : 30);
         } catch {}
-        if (payload.status === 'exact') playExact();
-        else playClose();
+        if (close) playClose();
+        else playExact();
         confetti({
-          particleCount: payload.status === 'exact' ? 28 : 12,
+          particleCount: payload.status === 'exact' ? 28 : payload.status === 'upgrade' ? 18 : 12,
           spread: 60,
           startVelocity: 32,
           origin: { y: 0.75 },
-          colors: payload.status === 'exact' ? ['#5FD68A', '#2EC4B6', '#FFC46B'] : ['#FFC53D'],
+          colors: close ? ['#FFC53D'] : ['#5FD68A', '#2EC4B6', '#FFC46B'],
           scalar: 0.8,
           disableForReducedMotion: true,
         });
@@ -194,36 +221,47 @@ function GuesserView({ state, clockOffset, actions }) {
   };
 
   const solved = turn.solvedCount || 0;
+  const viewportHeight = useVisibleViewportHeight();
 
+  // Fixed-height column (not min-height): sized to the VISIBLE viewport so
+  // when the keyboard opens the guess list shrinks — the timer stays pinned
+  // at the top and the input box stays glued just above the keyboard.
   return (
-    <div className="app-shell mx-auto flex w-full max-w-md flex-col px-4 py-4">
+    <div
+      className="relative mx-auto flex w-full max-w-md flex-col overflow-hidden px-4"
+      style={{
+        height: viewportHeight ? `${viewportHeight}px` : '100dvh',
+        paddingTop: 'max(env(safe-area-inset-top), 0.75rem)',
+        paddingBottom: 'max(env(safe-area-inset-bottom), 0.5rem)',
+      }}
+    >
       {flash && (
         <div
           className="pointer-events-none fixed inset-0 -z-0 animate-popIn"
           style={{ background: `radial-gradient(circle at 50% 70%, ${flash === 'exact' ? '#5FD68A33' : '#FFC53D33'}, transparent 60%)` }}
         />
       )}
-      <div className="mb-3">
+      <div className="mb-2">
         <ScoreStrip teams={teams} activeTeamId={turn.teamId} />
       </div>
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-2 flex items-center justify-between">
         <div>
           <div className="chip bg-teal/15 text-teal">⌨️ Guess the words</div>
           <div className="mt-1 pl-1 text-sm text-sand/45">
             <b className="text-sand/70">{turn.describerName}</b> is describing · {solved}/{turn.total} found
           </div>
         </div>
-        <Timer deadline={turn.deadline} total={total} offset={clockOffset} size={76} />
+        <Timer deadline={turn.deadline} total={total} offset={clockOffset} size={64} />
       </div>
 
-      <div className="mb-3">
+      <div className="mb-2">
         <ProgressDots total={turn.total} solved={solved} />
       </div>
 
-      <div ref={listRef} className="no-scrollbar mb-3 flex-1 space-y-1.5 overflow-y-auto">
+      <div ref={listRef} className="no-scrollbar mb-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto">
         {entries.length === 0 && (
-          <div className="mt-10 px-6 text-center text-sm text-sand/35">
-            Shout out guesses as single words — type each one and hit&nbsp;<b className="text-sand/60">Enter</b>.
+          <div className="mt-6 px-6 text-center text-sm text-sand/35">
+            Tap the box below and type each guess — hit&nbsp;<b className="text-sand/60">Enter</b> to send.
             <br />
             <b className="text-sand/60">franco or عربي — both count!</b> Unlimited tries.
           </div>
@@ -236,11 +274,11 @@ function GuesserView({ state, clockOffset, actions }) {
         ))}
       </div>
 
-      <form onSubmit={submit} className="sticky bottom-0 flex gap-2 pt-1">
+      {/* No autoFocus: the keyboard only opens when the player taps the box. */}
+      <form onSubmit={submit} className="flex shrink-0 gap-2 pt-1">
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
-          autoFocus
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="none"
@@ -248,9 +286,10 @@ function GuesserView({ state, clockOffset, actions }) {
           enterKeyHint="send"
           dir="auto"
           placeholder="Type a guess…"
-          className="flex-1 rounded-2xl border border-sand/10 bg-night-800 px-4 py-4 text-lg text-sand outline-none transition focus:border-teal/60 focus:ring-2 focus:ring-teal/30 placeholder:text-sand/30"
+          className="flex-1 rounded-2xl border border-sand/10 bg-night-800 px-4 py-3.5 text-lg text-sand outline-none transition focus:border-teal/60 focus:ring-2 focus:ring-teal/30 placeholder:text-sand/30"
         />
-        <button type="submit" className="btn-teal px-6 text-xl">↵</button>
+        {/* preventDefault keeps focus in the input so the keyboard stays open. */}
+        <button type="submit" onPointerDown={(e) => e.preventDefault()} className="btn-teal px-6 text-xl">↵</button>
       </form>
     </div>
   );
@@ -301,6 +340,7 @@ function SpectatorView({ state, clockOffset }) {
 function statusStyle(status) {
   switch (status) {
     case 'exact':
+    case 'upgrade':
       return 'bg-mint/15 text-mint ring-1 ring-mint/30';
     case 'close':
       return 'bg-amber/15 text-amber ring-1 ring-amber/30';
@@ -317,6 +357,8 @@ function statusLabel(status) {
   switch (status) {
     case 'exact':
       return '✅ +2';
+    case 'upgrade':
+      return '✅ +1 fixed';
     case 'close':
       return '🟡 +1 spelling';
     case 'duplicate':
