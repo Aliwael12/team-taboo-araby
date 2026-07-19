@@ -87,28 +87,38 @@ async function main() {
       }
       if (s && s.phase === 'turn' && s.turn && !handled.has(s.turn.index)) {
         const idx = s.turn.index;
-        handled.add(idx);
         const describer = all.find((c) => c.playerId === s.turn.describerId);
-        describerSeq.push(describer ? describer.name : '?');
-        const dWords = describer.state.turn.words;
         const guesser = all.find((c) => c.state && c.state.turn && c.state.turn.role === 'guesser');
         const spectator = all.find((c) => c.state && c.state.turn && c.state.turn.role === 'spectator');
-        redaction.push({
-          describerHasText: Array.isArray(dWords) && dWords.every((w) => w.display && (w.display.fr || w.display.ar)),
-          guesserNoText: guesser ? guesser.state.turn.words.every((w) => w.display === undefined) : true,
-          spectatorHasText: spectator ? (spectator.state.turn.words || []).length > 0 && spectator.state.turn.words.every((w) => w.display) : false,
-        });
-        if (guesser) {
-          for (let i = 0; i < dWords.length; i++) {
-            const d = dWords[i].display;
-            let guess, kind;
-            if (i === 1 && d.ar) { guess = d.ar; kind = 'exact'; }
-            else if (i === 2) { const b = d.fr || d.ar; guess = b + b.trim().slice(-1); kind = 'close'; }
-            else if (i === 3 && d.ar && d.ar.includes('ا')) { guess = d.ar.replace('ا', 'أ'); kind = 'exact'; }
-            else { guess = d.fr || d.ar; kind = 'exact'; }
-            const res = await emitGuess(guesser, guess);
-            scoreChecks.push({ kind, ok: kind === 'exact' ? res.status === 'exact' && res.points === 2 : res.status === 'close' && res.points === 1 });
-            if (res.gameOver) break;
+        // Each client learns about the phase change via its OWN broadcast,
+        // which can arrive at a different instant than the host's over a
+        // real network. Only proceed once every relevant client's local
+        // state has actually caught up to THIS turn being active — otherwise
+        // reading e.g. guesser.state.turn.words here can catch it mid-flight
+        // (still shaped like the prior 'ready' phase).
+        const caughtUp = (c) => c && c.state && c.state.phase === 'turn' && c.state.turn && c.state.turn.index === idx && Array.isArray(c.state.turn.words);
+        const ready = caughtUp(describer) && (!guesser || caughtUp(guesser)) && (!spectator || caughtUp(spectator));
+        if (ready) {
+          handled.add(idx);
+          describerSeq.push({ name: describer ? describer.name : '?', teamId: s.turn.teamId });
+          const dWords = describer.state.turn.words;
+          redaction.push({
+            describerHasText: Array.isArray(dWords) && dWords.every((w) => w.display && (w.display.fr || w.display.ar)),
+            guesserNoText: guesser ? guesser.state.turn.words.every((w) => w.display === undefined) : true,
+            spectatorHasText: spectator ? (spectator.state.turn.words || []).length > 0 && spectator.state.turn.words.every((w) => w.display) : false,
+          });
+          if (guesser) {
+            for (let i = 0; i < dWords.length; i++) {
+              const d = dWords[i].display;
+              let guess, kind;
+              if (i === 1 && d.ar) { guess = d.ar; kind = 'exact'; }
+              else if (i === 2) { const b = d.fr || d.ar; guess = b + b.trim().slice(-1); kind = 'close'; }
+              else if (i === 3 && d.ar && d.ar.includes('ا')) { guess = d.ar.replace('ا', 'أ'); kind = 'exact'; }
+              else { guess = d.fr || d.ar; kind = 'exact'; }
+              const res = await emitGuess(guesser, guess);
+              scoreChecks.push({ kind, ok: kind === 'exact' ? res.status === 'exact' && res.points === 2 : res.status === 'close' && res.points === 1 });
+              if (res.gameOver) break;
+            }
           }
         }
       }
@@ -119,8 +129,23 @@ async function main() {
   await Promise.race([drive(), waitFor(() => host.state && host.state.phase === 'gameOver', 120000, 'gameOver')]);
   await waitFor(() => host.state.phase === 'gameOver', 5000, 'final gameOver');
 
-  const expected = ['Claude', 'Carol', 'Bob', 'Dave', 'Claude', 'Carol', 'Bob', 'Dave'];
-  assert('turn rotation A-P1,B-P1,A-P2,B-P2,…', describerSeq.length >= expected.length && expected.every((n, i) => describerSeq[i] === n), describerSeq.slice(0, 9).join(' → '));
+  // Turn rotation invariants — NOT a hardcoded name sequence: which teammate
+  // goes first within a team depends on join-arrival order, which three
+  // independent WebSocket connections have no guaranteed ordering for over a
+  // real network. What must hold regardless: teams strictly alternate, and
+  // each team cycles its own two describers fairly (no repeats, no skips).
+  const seqLabel = describerSeq.slice(0, 9).map((d) => d.name).join(' → ');
+  const teamsAlternate = describerSeq.length >= 2 && describerSeq.every((d, i) => i === 0 || d.teamId !== describerSeq[i - 1].teamId);
+  const perTeamFair = ['A', 'B'].every((_, ti) => {
+    const teamIds = [...new Set(describerSeq.map((d) => d.teamId))];
+    const names = describerSeq.filter((d) => d.teamId === teamIds[ti]).map((d) => d.name);
+    if (names.length < 2) return true;
+    const distinct = new Set(names);
+    if (distinct.size !== 2) return false;
+    return names.every((n, i) => i === 0 || n !== names[i - 1]); // no back-to-back repeat
+  });
+  assert('turns strictly alternate between the two teams', teamsAlternate, seqLabel);
+  assert('each team fairly cycles its own two describers', perTeamFair, seqLabel);
   assert('describer always receives words', redaction.every((r) => r.describerHasText));
   assert('guessers never receive words', redaction.every((r) => r.guesserNoText));
   assert('opposing team sees the words', redaction.every((r) => r.spectatorHasText));
@@ -135,4 +160,4 @@ async function main() {
   process.exit(failed === 0 ? 0 : 1);
 }
 
-main().catch((e) => { console.error('SIM ERROR:', e.message); process.exit(2); });
+main().catch((e) => { console.error('SIM ERROR:', e.stack || e.message); process.exit(2); });
