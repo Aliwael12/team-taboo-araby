@@ -158,6 +158,7 @@ function GuesserView({ state, clockOffset, actions }) {
   const [entries, setEntries] = useState([]); // { id, text, status } — status 'pending' until the server rules
   const [flash, setFlash] = useState(null);
   const listRef = useRef(null);
+  const inputRef = useRef(null);
   const lastSubmitRef = useRef({ t: '', at: 0 });
 
   useEffect(() => {
@@ -203,14 +204,29 @@ function GuesserView({ state, clockOffset, actions }) {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [entries.length]);
 
+  // Mobile browsers routinely dismiss the on-screen keyboard as part of the
+  // Enter/Send key's native behavior, even though preventDefault() below
+  // stops the form from actually navigating — the blur happens independently
+  // of our JS. Re-focusing immediately (and once more next frame, since some
+  // browsers blur asynchronously right after the handler returns) keeps the
+  // keyboard open across rapid-fire guesses instead of closing after every word.
+  const keepKeyboardOpen = () => {
+    inputRef.current?.focus();
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
   const submit = (e) => {
     e.preventDefault();
     const t = text.trim();
-    if (!t) return;
+    if (!t) {
+      keepKeyboardOpen();
+      return;
+    }
     // Swallow accidental double-submits of the same word (double Enter taps).
     const now = Date.now();
     if (lastSubmitRef.current.t === t.toLowerCase() && now - lastSubmitRef.current.at < 700) {
       setText('');
+      keepKeyboardOpen();
       return;
     }
     lastSubmitRef.current = { t: t.toLowerCase(), at: now };
@@ -218,6 +234,7 @@ function GuesserView({ state, clockOffset, actions }) {
     const id = actions.submitGuess(t);
     setEntries((prev) => [...prev, { id, text: t, status: 'pending' }]);
     setText('');
+    keepKeyboardOpen();
   };
 
   const solved = turn.solvedCount || 0;
@@ -274,9 +291,11 @@ function GuesserView({ state, clockOffset, actions }) {
         ))}
       </div>
 
-      {/* No autoFocus: the keyboard only opens when the player taps the box. */}
+      {/* No autoFocus: the keyboard only opens when the player taps the box.
+          Once open, it's meant to stay open across every guess — see submit(). */}
       <form onSubmit={submit} className="flex shrink-0 gap-2 pt-1">
         <input
+          ref={inputRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           autoComplete="off"
